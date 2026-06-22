@@ -1,0 +1,5 @@
+tags = ["ai", "vehicles", "gitlab-43", "headless"]
+binary = "PoseidonGame"
+mission = "tests/integration/missions/cargo_leader_getout.Demo"
+timeout = 90
+assert_timeout = 30

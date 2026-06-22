@@ -1,0 +1,7 @@
+binary = "PoseidonGameDemo"
+no_menu = true
+timeout = 120
+# Skip the 3D menu cutscene (intro.demo): this test only exercises the options
+# UI, and the live cutscene adds GPU-timing flakiness for no extra coverage.
+extra_args = ["--no-menu-scene"]
+tags = ["headful"]

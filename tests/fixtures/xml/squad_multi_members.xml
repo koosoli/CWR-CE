@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<!DOCTYPE squad SYSTEM "squad.dtd">
+<squad nick="MULTI">
+  <name>Multi Member Squad</name>
+  <email>contact@multisquad.com</email>
+  <web>http://www.multisquad.com</web>
+  <picture>multi.paa</picture>
+  <title>Large Active Squad</title>
+  <member id="11111111" nick="Alpha">
+    <name>Alpha Player</name>
+    <email>alpha@multisquad.com</email>
+    <icq>111111</icq>
+    <remark>Team Alpha leader</remark>
+  </member>
+  <member id="22222222" nick="Bravo">
+    <name>Bravo Player</name>
+    <email>bravo@multisquad.com</email>
+    <icq>222222</icq>
+    <remark>Team Bravo leader</remark>
+  </member>
+  <member id="33333333" nick="Charlie">
+    <name>Charlie Player</name>
+    <email>charlie@multisquad.com</email>
+    <icq>333333</icq>
+    <remark>Team Charlie leader</remark>
+  </member>
+  <member id="44444444" nick="Delta">
+    <name>Delta Player</name>
+    <email>delta@multisquad.com</email>
+    <icq>444444</icq>
+    <remark>Team Delta leader</remark>
+  </member>
+  <member id="55555555" nick="Echo">
+    <name>Echo Player</name>
+    <email>echo@multisquad.com</email>
+    <icq>555555</icq>
+    <remark>Support specialist</remark>
+  </member>
+</squad>

@@ -1,0 +1,4 @@
+tags = ["audio", "preload", "loading", "headless"]
+binary = "PoseidonGame"
+mission = "tests/integration/missions/sound_preload.Demo"
+timeout = 120

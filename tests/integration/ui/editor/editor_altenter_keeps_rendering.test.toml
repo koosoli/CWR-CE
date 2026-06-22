@@ -1,0 +1,3 @@
+tags = ["editor", "fullscreen", "regression", "ui"]
+timeout = 45
+extra_args = ["--width", "1334", "--height", "1000"]

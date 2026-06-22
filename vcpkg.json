@@ -1,0 +1,52 @@
+{
+  "name": "cwr",
+  "version": "1.0",
+  "dependencies": [
+    "catch2",
+    "cjson",
+    { "name": "curl", "features": ["ssl"] },
+    "glslang",
+    "cli11",
+    "stb",
+    "mimalloc",
+    "zstd",
+    "sdl3",
+    "openal-soft",
+    "opus",
+    "libogg",
+    "libvorbis",
+    "enkits",
+    {
+      "name": "imgui",
+      "features": ["sdl3-binding", "sdl3-renderer-binding", "opengl3-binding", "freetype"]
+    },
+    {
+      "name": "spdlog",
+      "features": ["wchar"],
+      "platform": "windows"
+    },
+    {
+      "name": "spdlog",
+      "platform": "!windows"
+    }
+  ],
+  "builtin-baseline": "15cd15b0da3c48a0c7720e4c87e0b6030334feed",
+  "overrides": [
+    {
+      "name": "catch2",
+      "version": "3.5.2"
+    },
+    {
+      "name": "cli11",
+      "version": "2.4.0"
+    },
+    {
+      "name": "mimalloc",
+      "version": "2.2.4"
+    },
+    {
+      "name": "spdlog",
+      "version": "1.15.1"
+    }
+  ]
+}

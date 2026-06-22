@@ -1,0 +1,18 @@
+class Base
+{
+    baseProperty = "from base";
+    sharedProperty = "original";
+    baseValue = 100;
+};
+
+class Derived : Base
+{
+    derivedProperty = "from derived";
+    sharedProperty = "overridden";
+};
+
+class MoreDerived : Derived
+{
+    moreDerivedProperty = "from more derived";
+    derivedProperty = "overridden again";
+};

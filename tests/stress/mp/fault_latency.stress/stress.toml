@@ -1,0 +1,64 @@
+mission = "tests/integration/mp/jip_stress.eden"
+game_port = 2302
+
+[probes]
+interval_ms = 1000
+queries = ["ngs", "players"]
+
+[toxiproxy]
+enabled = true
+backend = "udp_fault_proxy"
+
+[[toxiproxy.links]]
+name = "server-link"
+listen = "127.0.0.1:2302"
+upstream = "127.0.0.1:2303"
+
+[[instances]]
+name = "server"
+type = "server"
+network_port = 2303
+extra_args = ["--mp-auto-start", "1"]
+
+[[instances]]
+name = "client1"
+type = "client"
+connect = "server"
+connect_host = "127.0.0.1"
+after = "server"
+mp_assign = "WEST:1"
+
+[[phases]]
+name = "settle"
+duration_ms = 20000
+
+[[phases]]
+name = "latency"
+duration_ms = 8000
+
+[[phases.toxics]]
+link = "server-link"
+name = "latency"
+type = "latency"
+stream = "downstream"
+
+[phases.toxics.attributes]
+latency = 250
+
+[[phases]]
+name = "recover"
+duration_ms = 4000
+
+[[phases]]
+name = "verify"
+duration_ms = 8000
+
+[[phases.after_actions]]
+action = "script"
+role = "server"
+script = "hooks/server_expect_briefing.sqf"
+
+[[phases.after_actions]]
+action = "script"
+role = "client1"
+script = "hooks/client1_expect_briefing.sqf"

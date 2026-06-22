@@ -1,0 +1,12 @@
+# Point the MODS scan at the isolated test mod
+# (tests/fixtures/mods/@fixturemod). It lives in its own fixture dir, NOT
+# the shared packages/mods, so unrelated content landing in packages/mods can't add
+# stray rows and break this test's "exactly 1 local mod" assertion (card #198).
+# The game's working directory under tri is the data dir (packages/Remaster), so
+# ../../tests/fixtures/mods resolves to the repo's tests/fixtures/mods.
+# --mods-dir is the MODS screen's local scan root.
+#
+extra_args = ["--mods-dir", "../../tests/fixtures/mods"]
+timeout = 120
+assert_timeout = 60
+tags = ["headful"]

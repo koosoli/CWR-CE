@@ -1,0 +1,58 @@
+version=11;
+class Mission
+{
+	randomSeed=22000022;
+	class Intel
+	{
+		viewDistance=900;
+		startWeather=0.487594;
+		forecastWeather=0.687794;
+		month=7;
+		day=5;
+		hour=5;
+		minute=35;
+	};
+	class Groups
+	{
+		items=1;
+		class Item0
+		{
+			side="WEST";
+			class Vehicles
+			{
+				items=1;
+				class Item0
+				{
+					position[]={6710.527832,82.907585,5408.891602};
+					id=0;
+					side="WEST";
+					vehicle="SoldierWB";
+					player="PLAYER COMMANDER";
+					leader=1;
+					skill=0.600000;
+				};
+			};
+		};
+	};
+};
+class Intro
+{
+	randomSeed=22000023;
+	class Intel
+	{
+	};
+};
+class OutroWin
+{
+	randomSeed=22000024;
+	class Intel
+	{
+	};
+};
+class OutroLoose
+{
+	randomSeed=22000025;
+	class Intel
+	{
+	};
+};

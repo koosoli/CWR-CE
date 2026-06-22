@@ -1,0 +1,65 @@
+respawn = 3;
+respawnDelay = 10;
+onLoadName = "Defend Petrovice";
+onLoadMission = "Soviet forces are attacking the town. Hold your positions!";
+author = "Synthetic Fixture Suite";
+briefingName = "01 - Defend";
+
+class Header {
+    gameType = Coop;
+    minPlayers = 1;
+    maxPlayers = 12;
+};
+
+class Params {
+    class TimeOfDay {
+        title = "Time of Day";
+        values[] = {6, 12, 18, 22};
+        texts[] = {"Dawn", "Noon", "Dusk", "Night"};
+        default = 12;
+    };
+    class Weather {
+        title = "Weather Conditions";
+        values[] = {0, 0.5, 1};
+        texts[] = {"Clear", "Overcast", "Rain"};
+        default = 0;
+    };
+    class Difficulty {
+        title = "Enemy Skill";
+        values[] = {0, 1, 2};
+        texts[] = {"Recruit", "Veteran", "Elite"};
+        default = 1;
+    };
+};
+
+class CfgRadio {
+    class Contact {
+        name = "";
+        sound[] = {"radio\contact.ogg", db+5, 1.0};
+        title = "Contact!";
+    };
+    class Regroup {
+        name = "";
+        sound[] = {"radio\regroup.ogg", db+5, 1.0};
+        title = "Regroup at rally point";
+    };
+};
+
+class CfgMusic {
+    tracks[] = {};
+    class Intro {
+        name = "Mission Intro";
+        sound[] = {"music\intro.ogg", db+10, 1.0};
+    };
+    class Action {
+        name = "Action Theme";
+        sound[] = {"music\action.ogg", db+5, 1.0};
+    };
+};
+
+class CfgBriefing {
+    class West {
+        title = "US Forces";
+        description = "Your squad must defend Petrovice from Soviet attack. Hold the town center and prevent enemy from capturing the radio station.";
+    };
+};

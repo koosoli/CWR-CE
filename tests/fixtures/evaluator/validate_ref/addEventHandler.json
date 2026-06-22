@@ -1,0 +1,12 @@
+{
+  "name": "addEventHandler",
+  "arity": "binary",
+  "group": "objects",
+  "description": "Adds an event handler.",
+  "syntax": "object addEventHandler [type, code]",
+  "return_type": "Number",
+  "arg_types": ["Object", "Array"],
+  "examples": [
+    "player addEventHandler [\"killed\", {hint \"dead\"}]"
+  ]
+}

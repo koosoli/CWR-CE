@@ -1,0 +1,15 @@
+; init.sqs — runs on all machines at mission start
+; Initialize shared state
+westFunds = 1000
+publicVariable "westFunds"
+eastFunds = 1000
+publicVariable "eastFunds"
+westScore = 0
+publicVariable "westScore"
+eastScore = 0
+publicVariable "eastScore"
+spawnCount = 0
+publicVariable "spawnCount"
+initRan = true
+publicVariable "initRan"
+exit

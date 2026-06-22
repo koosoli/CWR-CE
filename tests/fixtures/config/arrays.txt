@@ -1,0 +1,4 @@
+numbers[] = {1, 2, 3, 4, 5};
+strings[] = {"alpha", "bravo", "charlie"};
+mixed[] = {1, "two", 3.0, true};
+empty[] = {};

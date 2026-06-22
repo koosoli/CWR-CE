@@ -1,0 +1,6 @@
+; SQS with delay and wait
+~2
+hint "after delay"
+@true
+hint "after wait"
+exit

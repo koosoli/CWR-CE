@@ -1,0 +1,9 @@
+tags = ["exclusive", "headless"]
+binary = "PoseidonGame"
+no_menu = false
+timeout = 30
+extra_args = [
+    "--no-strict",
+    "--width", "1920",
+    "--height", "540"
+]

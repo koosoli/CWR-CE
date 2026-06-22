@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PAPA BEAR Mod</title>
+    <link rel="stylesheet" href="/assets/site.css" />
+  </head>
+  <body data-page="mod-detail">
+    <nav class="top-menu"></nav>
+
+    <a href="/mods" class="back-link">BACK</a>
+
+    <h1 id="mod-detail-title" class="title">Loading mod...</h1>
+    <div id="mod-detail-summary" class="status-line">Loading...</div>
+
+    <section class="detail-panel detail-page">
+      <div id="mod-detail-facts" class="detail-facts">Loading...</div>
+      <div class="detail-columns detail-top-grid">
+        <section class="detail-section">
+          <div class="detail-label">DESCRIPTION</div>
+          <div id="mod-detail-description" class="detail-copy">-</div>
+        </section>
+        <section class="detail-section">
+          <div class="detail-label">LINKS</div>
+          <div id="mod-detail-links" class="detail-copy">-</div>
+          <div class="detail-label action-label">ACTION</div>
+          <button id="mod-detail-add" type="button" class="action-button">ADD</button>
+        </section>
+      </div>
+
+      <section class="detail-section">
+        <div class="detail-label">VERSIONS</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>State</th>
+              <th>Links</th>
+            </tr>
+          </thead>
+          <tbody id="mod-versions-rows">
+            <tr>
+              <td colspan="3">-</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="detail-section">
+        <div class="detail-label">SERVERS USING THIS MOD</div>
+        <table>
+          <thead>
+            <tr>
+              <th>Server</th>
+              <th>Mode</th>
+              <th>Players</th>
+              <th>Access</th>
+            </tr>
+          </thead>
+          <tbody id="mod-servers-rows">
+            <tr>
+              <td colspan="4">-</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </section>
+
+    <script src="/assets/papa-bear.js"></script>
+  </body>
+</html>

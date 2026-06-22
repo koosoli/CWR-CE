@@ -1,0 +1,9 @@
+aP = player
+UH = "UH60MG" createVehicle [6519.040039,149.663788,6473.679199]
+UH setPos [6519.040039,149.663788,6473.679199]
+aP moveInCargo UH
+Konec = 0
+Go = false
+Ukonci = false
+uplkonec = false
+exit

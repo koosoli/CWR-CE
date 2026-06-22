@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!DOCTYPE squad SYSTEM "squad.dtd">
+<squad nick="SPEC&amp;CHAR">
+  <name>Special &amp; Characters Squad &lt;Test&gt;</name>
+  <email>test@special-chars.com</email>
+  <web>http://www.special-chars.com?param=value&amp;other=test</web>
+  <picture>special.paa</picture>
+  <title>Testing &quot;Special&quot; Characters &amp; Entities</title>
+  <member id="99999999" nick="TestUser">
+    <name>Test &lt;User&gt; Name</name>
+    <email>&quot;quoted&quot;@test.com</email>
+    <icq>999999</icq>
+    <remark>Bio with &quot;double quotes&quot; and &apos;single quotes&apos; &amp; ampersands &lt;brackets&gt; &#65;&#66;&#67;</remark>
+  </member>
+  <member id="88888888" nick="User2">
+    <name>Another &amp; User</name>
+    <email>user2@test.com</email>
+    <icq>888888</icq>
+    <remark>Testing &#60; less-than and &#62; greater-than numeric refs</remark>
+  </member>
+</squad>

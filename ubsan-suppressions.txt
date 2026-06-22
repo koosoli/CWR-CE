@@ -1,0 +1,12 @@
+# PoseidonBase UBSan suppressions
+# Known alignment issues in StreamArray - tracked for 64-bit port
+# Keep until migrating to aligned storage (breaks save compatibility)
+alignment:streamArray.hpp
+alignment:test_streamArray.cpp
+# Enum tests deliberately use invalid enum values to test error handling
+enum:test_enumNames.cpp
+enum:enumNames.hpp
+enum:catch_decomposer.hpp
+# Legacy preprocessor uses null-pointer member calls (2001 pattern)
+null:Preproc.cpp
+null:Preproc.h

@@ -1,0 +1,4 @@
+tags = ["exclusive", "headful"]
+binary = "PoseidonGameDemo"
+no_menu = true
+timeout = 60

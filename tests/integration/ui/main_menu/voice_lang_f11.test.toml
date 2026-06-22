@@ -1,0 +1,6 @@
+binary = "PoseidonGame"
+no_menu = true
+timeout = 60
+# F11 (voice language cycle) + F12 (text language cycle) are dev-only hotkeys, gated by --dev.
+extra_args = ["--dev"]
+tags = ["headless"]

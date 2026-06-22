@@ -1,0 +1,5 @@
+LANGUAGE,English
+STR_MISSION_01,"Synthetic Field Trial"
+STR_MISSION_BRIEF,"Your mission is to verify the fixture"
+STR_OBJ_PRIMARY,"Reach the generated marker"
+STR_OBJ_SECONDARY,"Record the synthetic signal"

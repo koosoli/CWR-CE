@@ -1,0 +1,3 @@
+timeout = 30
+extra_args = ["--focus"]
+tags = ["headful"]

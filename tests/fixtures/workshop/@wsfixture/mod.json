@@ -1,0 +1,6 @@
+{
+    "modId": "wsfixture",
+    "name": "Workshop Fixture",
+    "version": "2.0.0",
+    "description": "Tiny committed fixture mod placed under a workshop root, so the MODS scan classifies it as a downloaded (Workshop) mod by its location."
+}

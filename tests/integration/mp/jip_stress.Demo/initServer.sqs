@@ -1,0 +1,24 @@
+; initServer.sqs — server-only init
+; Track connected players
+playerCount = 0
+publicVariable "playerCount"
+
+; Set up player connection handler
+onPlayerConnected {playerCount = playerCount + 1; publicVariable "playerCount"}
+
+; Simulate CTI economy: deduct funds over time
+serverInitRan = true
+publicVariable "serverInitRan"
+
+; Spawn loop: create vehicles periodically to exercise object sync
+goto "spawnLoop"
+
+#spawnLoop
+~5
+westFunds = westFunds - 50
+publicVariable "westFunds"
+spawnCount = spawnCount + 1
+publicVariable "spawnCount"
+westScore = westScore + 10
+publicVariable "westScore"
+goto "spawnLoop"

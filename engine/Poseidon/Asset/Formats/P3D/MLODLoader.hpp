@@ -1,0 +1,469 @@
+#pragma once
+
+#include <Poseidon/World/Model/Model.hpp>
+#include <Poseidon/Asset/Formats/P3D/MLODStructures.hpp>
+#include <Poseidon/Asset/Formats/BISBinaryStream.hpp>
+#include <Poseidon/Core/Data3D.h>
+#include <Poseidon/Core/Types.hpp>
+#include <Poseidon/Graphics/Rendering/Draw/SpecLods.hpp>
+#include <algorithm>
+#include <fstream>
+#include <unordered_map>
+#include <vector>
+
+namespace Poseidon::Asset::Formats
+{
+
+class MLODLoader
+{
+  public:
+    using Model          = Poseidon::Model::Model;
+    using LODLevel       = Poseidon::Model::LODLevel;
+    using Mesh           = Poseidon::Model::Mesh;
+    using Vertex         = Poseidon::Model::Vertex;
+    using Triangle       = Poseidon::Model::Triangle;
+    using Quad           = Poseidon::Model::Quad;
+    using Material       = Poseidon::Model::Material;
+    using NamedSelection = Poseidon::Model::NamedSelection;
+    using NamedProperty  = Poseidon::Model::NamedProperty;
+    using Vector3        = Poseidon::Model::Vector3;
+    using Vector2        = Poseidon::Model::Vector2;
+    using VertexFlags    = Poseidon::Model::VertexFlags;
+    using FaceFlags      = Poseidon::Model::FaceFlags;
+
+    static Model load(const std::string& filePath)
+    {
+        std::ifstream file(filePath, std::ios::binary | std::ios::ate);
+        if (!file)
+            throw std::runtime_error("Failed to open file: " + filePath);
+        auto          size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        std::vector<char> buffer(static_cast<size_t>(size));
+        file.read(buffer.data(), size);
+        return loadFromBuffer(buffer.data(), static_cast<int>(buffer.size()), filePath);
+    }
+
+    static Model loadFromBuffer(const char* data, int size, const std::string& sourcePath)
+    {
+        QIStream     stream(const_cast<char*>(data), size);
+        BinaryReader reader(stream);
+
+        Model model;
+        model.sourceFormat = "MLOD";
+        model.sourcePath   = sourcePath;
+
+        auto header        = MLOD::readHeader(reader);
+        model.sourceVersion = header.versionMajor * 10 + header.versionMinor;
+
+        for (uint32_t lodIdx = 0; lodIdx < header.lodCount; ++lodIdx)
+            model.lodLevels.push_back(loadLOD(reader));
+
+        return model;
+    }
+
+  private:
+    static LODLevel loadLOD(BinaryReader& reader)
+    {
+        LODLevel lod;
+        auto     sp3xHeader  = MLOD::readSP3XHeader(reader);
+        auto     vertexTable = MLOD::readVertexTable(reader, sp3xHeader.nPos);
+        auto     normalTable = MLOD::readNormalTable(reader, sp3xHeader.nNorm);
+        auto     faceTable   = MLOD::readFaceTable(reader, sp3xHeader.nFace);
+        auto     taggData    = MLOD::readTAGGSection(reader, sp3xHeader.nPos, sp3xHeader.nFace);
+
+        auto vertexToPoint = convertGeometry(lod.mesh, vertexTable, normalTable, faceTable, taggData);
+        convertMaterials(lod.mesh, faceTable);
+        convertSelections(lod.mesh, taggData.namedSelections, vertexTable, faceTable, vertexToPoint);
+        convertProperties(lod.mesh, taggData.namedProperties);
+        sortVerticesByPointIndex(lod.mesh, vertexToPoint);
+        lod.resolution = taggData.resolution;
+
+        return lod;
+    }
+
+    // Converts raw POINT_* flags from data3d.h to ClipFlags (matches Shape.cpp:410-504)
+    static uint32_t convertPointFlagsToClipFlags(uint32_t pointFlags)
+    {
+        const uint32_t allFlags = (POINT_ONLAND | POINT_UNDERLAND | POINT_ABOVELAND | POINT_KEEPLAND |
+                                   POINT_DECAL | POINT_VDECAL | POINT_NOLIGHT | POINT_FULLLIGHT |
+                                   POINT_HALFLIGHT | POINT_AMBIENT | POINT_NOFOG | POINT_SKYFOG |
+                                   POINT_USER_MASK | POINT_SPECIAL_MASK);
+        if (pointFlags & ~allFlags)
+            pointFlags = 0;
+
+        ClipFlags hints = ClipAll;
+        if (!(pointFlags & allFlags))
+            return static_cast<uint32_t>(hints);
+
+        if (pointFlags & POINT_ONLAND)
+            hints |= ClipLandOn;
+        else if (pointFlags & POINT_UNDERLAND)
+            hints |= ClipLandUnder;
+        else if (pointFlags & POINT_ABOVELAND)
+            hints |= ClipLandAbove;
+        else if (pointFlags & POINT_KEEPLAND)
+            hints |= ClipLandKeep;
+
+        if (pointFlags & POINT_DECAL)
+            hints |= ClipDecalNormal;
+        else if (pointFlags & POINT_VDECAL)
+            hints |= ClipDecalVertical;
+
+        // Explicit cast: MaterialSection is named enum, ClipUserStep is unnamed — arithmetic deprecated in C++20
+        if (pointFlags & POINT_NOLIGHT)
+            hints |= static_cast<uint32_t>(MSShining) * ClipUserStep;
+        else if (pointFlags & POINT_FULLLIGHT)
+            hints |= static_cast<uint32_t>(MSFullLighted) * ClipUserStep;
+        else if (pointFlags & POINT_HALFLIGHT)
+            hints |= static_cast<uint32_t>(MSHalfLighted) * ClipUserStep;
+        else if (pointFlags & POINT_AMBIENT)
+            hints |= static_cast<uint32_t>(MSInShadow) * ClipUserStep;
+
+        if (pointFlags & POINT_NOFOG)
+            hints |= ClipFogDisable;
+        else if (pointFlags & POINT_SKYFOG)
+            hints |= ClipFogSky;
+
+        if (pointFlags & POINT_USER_MASK)
+        {
+            int user = (pointFlags & POINT_USER_MASK) / POINT_USER_STEP;
+            hints |= user * ClipUserStep;
+        }
+
+        return static_cast<uint32_t>(hints);
+    }
+
+    static std::vector<int32_t> convertGeometry(Mesh& mesh,
+                                                 const MLOD::VertexTable& vertexTable,
+                                                 const MLOD::NormalTable& normalTable,
+                                                 const MLOD::FaceTable&   faceTable,
+                                                 const MLOD::TAGGData&    taggData)
+    {
+        if (faceTable.faces.empty() && !vertexTable.points.empty())
+        {
+            mesh.vertices.reserve(vertexTable.points.size());
+            for (const auto& point : vertexTable.points)
+            {
+                Vertex v;
+                v.position = Vector3(point.position.x, point.position.y, point.position.z);
+                v.flags    = static_cast<VertexFlags>(convertPointFlagsToClipFlags(static_cast<uint32_t>(point.flags)));
+                mesh.vertices.push_back(v);
+            }
+            std::vector<int32_t> vertexToPoint(mesh.vertices.size());
+            for (size_t i = 0; i < mesh.vertices.size(); ++i)
+                vertexToPoint[i] = static_cast<int32_t>(i);
+            return vertexToPoint;
+        }
+
+        std::vector<std::vector<uint32_t>> pointToVertices(vertexTable.points.size());
+
+        auto verticesEqual = [](const Vertex& a, const Vertex& b) -> bool
+        {
+            // Match old VertexTable::AddVertex precision (squared-distance)
+            constexpr float precPos2  = 0.005f * 0.005f;
+            constexpr float precNorm2 = 0.05f * 0.05f;
+            constexpr float precUV    = 0.005f;
+            if (a.flags != b.flags)
+                return false;
+            float dx = a.position.x - b.position.x, dy = a.position.y - b.position.y,
+                  dz = a.position.z - b.position.z;
+            if (dx * dx + dy * dy + dz * dz > precPos2)
+                return false;
+            float dnx = a.normal.x - b.normal.x, dny = a.normal.y - b.normal.y,
+                  dnz = a.normal.z - b.normal.z;
+            if (dnx * dnx + dny * dny + dnz * dnz > precNorm2)
+                return false;
+            if (std::abs(a.uv.u - b.uv.u) > precUV)
+                return false;
+            if (std::abs(a.uv.v - b.uv.v) > precUV)
+                return false;
+            return true;
+        };
+
+        mesh.vertices.reserve(faceTable.faces.size() * 3);
+        mesh.triangles.reserve(faceTable.faces.size());
+
+        uint32_t faceIndex = 0;
+        for (const auto& face : faceTable.faces)
+        {
+            if (face.n == 3)
+            {
+                Triangle tri;
+                for (int i = 0; i < 3; ++i)
+                {
+                    Vertex  v;
+                    int32_t pointIndex = face.vs[i].point;
+                    if (pointIndex >= 0 && pointIndex < static_cast<int32_t>(vertexTable.points.size()))
+                    {
+                        const auto& pt = vertexTable.points[pointIndex];
+                        v.position = Vector3(pt.position.x, pt.position.y, pt.position.z);
+                        v.flags = static_cast<VertexFlags>(convertPointFlagsToClipFlags(static_cast<uint32_t>(pt.flags)));
+                    }
+                    if (face.vs[i].normal >= 0 && face.vs[i].normal < static_cast<int32_t>(normalTable.normals.size()))
+                    {
+                        const auto& n = normalTable.normals[face.vs[i].normal];
+                        v.normal = Vector3(n.x, n.y, n.z);
+                    }
+                    v.uv = Vector2(face.vs[i].mapU, face.vs[i].mapV);
+
+                    uint32_t foundIndex = UINT32_MAX;
+                    if (pointIndex >= 0 && pointIndex < static_cast<int32_t>(pointToVertices.size()))
+                    {
+                        for (uint32_t vi : pointToVertices[pointIndex])
+                        {
+                            if (verticesEqual(mesh.vertices[vi], v))
+                            {
+                                foundIndex = vi;
+                                break;
+                            }
+                        }
+                    }
+                    if (foundIndex != UINT32_MAX)
+                    {
+                        tri.indices[i] = foundIndex;
+                    }
+                    else
+                    {
+                        tri.indices[i] = static_cast<uint32_t>(mesh.vertices.size());
+                        if (pointIndex >= 0 && pointIndex < static_cast<int32_t>(pointToVertices.size()))
+                            pointToVertices[pointIndex].push_back(tri.indices[i]);
+                        mesh.vertices.push_back(v);
+                    }
+                }
+                tri.flags         = static_cast<FaceFlags>(static_cast<uint32_t>(face.flags));
+                tri.originalIndex = faceIndex++;
+                std::swap(tri.indices[0], tri.indices[1]); // reverse winding
+                mesh.triangles.push_back(tri);
+            }
+            else if (face.n == 4)
+            {
+                Quad quad;
+                for (int i = 0; i < 4; ++i)
+                {
+                    Vertex  v;
+                    int32_t pointIndex = face.vs[i].point;
+                    if (pointIndex >= 0 && pointIndex < static_cast<int32_t>(vertexTable.points.size()))
+                    {
+                        const auto& pt = vertexTable.points[pointIndex];
+                        v.position = Vector3(pt.position.x, pt.position.y, pt.position.z);
+                        v.flags = static_cast<VertexFlags>(convertPointFlagsToClipFlags(static_cast<uint32_t>(pt.flags)));
+                    }
+                    if (face.vs[i].normal >= 0 && face.vs[i].normal < static_cast<int32_t>(normalTable.normals.size()))
+                    {
+                        const auto& n = normalTable.normals[face.vs[i].normal];
+                        v.normal = Vector3(n.x, n.y, n.z);
+                    }
+                    v.uv = Vector2(face.vs[i].mapU, face.vs[i].mapV);
+
+                    uint32_t foundIndex = UINT32_MAX;
+                    if (pointIndex >= 0 && pointIndex < static_cast<int32_t>(pointToVertices.size()))
+                    {
+                        for (uint32_t vi : pointToVertices[pointIndex])
+                        {
+                            if (verticesEqual(mesh.vertices[vi], v))
+                            {
+                                foundIndex = vi;
+                                break;
+                            }
+                        }
+                    }
+                    if (foundIndex != UINT32_MAX)
+                    {
+                        quad.indices[i] = foundIndex;
+                    }
+                    else
+                    {
+                        quad.indices[i] = static_cast<uint32_t>(mesh.vertices.size());
+                        if (pointIndex >= 0 && pointIndex < static_cast<int32_t>(pointToVertices.size()))
+                            pointToVertices[pointIndex].push_back(quad.indices[i]);
+                        mesh.vertices.push_back(v);
+                    }
+                }
+                quad.flags         = static_cast<FaceFlags>(static_cast<uint32_t>(face.flags));
+                quad.originalIndex = faceIndex++;
+                std::swap(quad.indices[0], quad.indices[1]); // reverse winding
+                std::swap(quad.indices[2], quad.indices[3]);
+                mesh.quads.push_back(quad);
+            }
+        }
+
+        std::vector<int32_t> vertexToPoint(mesh.vertices.size(), -1);
+        for (int32_t pointIdx = 0; pointIdx < static_cast<int32_t>(pointToVertices.size()); ++pointIdx)
+        {
+            for (uint32_t vertexIdx : pointToVertices[pointIdx])
+            {
+                if (vertexIdx < vertexToPoint.size())
+                    vertexToPoint[vertexIdx] = pointIdx;
+            }
+        }
+
+        return vertexToPoint;
+    }
+
+    static void convertMaterials(Mesh& mesh, const MLOD::FaceTable& faceTable)
+    {
+        std::unordered_map<std::string, uint32_t> materialMap;
+        for (const auto& face : faceTable.faces)
+        {
+            std::string textureName(face.texture);
+            size_t      nullPos = textureName.find('\0');
+            if (nullPos != std::string::npos)
+                textureName = textureName.substr(0, nullPos);
+            const bool isEmpty = textureName.empty();
+            if (isEmpty)
+                textureName = "#default#";
+            if (materialMap.find(textureName) == materialMap.end())
+            {
+                Material mat;
+                mat.name        = textureName;
+                mat.texturePath = isEmpty ? "" : textureName;
+                materialMap[textureName] = static_cast<uint32_t>(mesh.materials.size());
+                mesh.materials.push_back(mat);
+            }
+        }
+
+        size_t triIdx = 0, quadIdx = 0;
+        for (const auto& face : faceTable.faces)
+        {
+            std::string textureName(face.texture);
+            size_t      nullPos = textureName.find('\0');
+            if (nullPos != std::string::npos)
+                textureName = textureName.substr(0, nullPos);
+            uint32_t materialIdx = 0;
+            if (!textureName.empty())
+                materialIdx = materialMap[textureName];
+            if (face.n == 3)
+            {
+                if (triIdx < mesh.triangles.size())
+                    mesh.triangles[triIdx].materialIndex = materialIdx;
+                triIdx++;
+            }
+            else if (face.n == 4)
+            {
+                if (quadIdx < mesh.quads.size())
+                    mesh.quads[quadIdx].materialIndex = materialIdx;
+                quadIdx++;
+            }
+        }
+    }
+
+    static void convertSelections(Mesh& mesh,
+                                  const std::vector<MLOD::TAGGNamedSelection>& selections,
+                                  const MLOD::VertexTable&                     vertexTable,
+                                  const MLOD::FaceTable&                       faceTable,
+                                  const std::vector<int32_t>&                  vertexToPoint)
+    {
+        std::vector<std::vector<uint32_t>> pointToVertices(vertexTable.points.size());
+        for (size_t vertIdx = 0; vertIdx < vertexToPoint.size(); ++vertIdx)
+        {
+            int32_t pointIdx = vertexToPoint[vertIdx];
+            if (pointIdx >= 0 && pointIdx < static_cast<int32_t>(pointToVertices.size()))
+                pointToVertices[pointIdx].push_back(static_cast<uint32_t>(vertIdx));
+        }
+
+        for (const auto& sel : selections)
+        {
+            NamedSelection selection;
+            selection.name = sel.name;
+            for (size_t pointIdx = 0; pointIdx < sel.pointWeights.size(); ++pointIdx)
+            {
+                if (sel.pointWeights[pointIdx] > 0 && pointIdx < pointToVertices.size())
+                {
+                    for (uint32_t vertIdx : pointToVertices[pointIdx])
+                        selection.vertexIndices.push_back(vertIdx);
+                }
+            }
+            size_t triIdx = 0;
+            for (size_t faceIdx = 0; faceIdx < sel.faceFlags.size(); ++faceIdx)
+            {
+                if (sel.faceFlags[faceIdx])
+                {
+                    const auto& face = faceTable.faces[faceIdx];
+                    if (face.n == 3)
+                    {
+                        selection.triangleIndices.push_back(static_cast<uint32_t>(triIdx));
+                        triIdx++;
+                    }
+                    else if (face.n == 4)
+                    {
+                        selection.triangleIndices.push_back(static_cast<uint32_t>(triIdx));
+                        selection.triangleIndices.push_back(static_cast<uint32_t>(triIdx + 1));
+                        triIdx += 2;
+                    }
+                }
+                else
+                {
+                    const auto& face = faceTable.faces[faceIdx];
+                    triIdx += (face.n == 4) ? 2 : 1;
+                }
+            }
+            mesh.selections.push_back(selection);
+        }
+    }
+
+    static void convertProperties(Mesh& mesh, const std::vector<MLOD::TAGGNamedProperty>& properties)
+    {
+        for (const auto& prop : properties)
+        {
+            NamedProperty namedProp;
+            namedProp.name  = prop.property;
+            namedProp.value = prop.value;
+            mesh.properties.push_back(namedProp);
+        }
+    }
+
+    static void sortVerticesByPointIndex(Mesh& mesh, const std::vector<int32_t>& vertexToPoint)
+    {
+        if (mesh.vertices.empty() || vertexToPoint.empty())
+            return;
+
+        struct SortEntry
+        {
+            uint32_t    originalIndex;
+            int32_t     pointIndex;
+            VertexFlags flags;
+        };
+
+        std::vector<SortEntry> sortEntries;
+        sortEntries.reserve(mesh.vertices.size());
+        for (uint32_t i = 0; i < mesh.vertices.size(); ++i)
+            sortEntries.push_back({i, vertexToPoint[i], mesh.vertices[i].flags});
+
+        // Old loader sorts by material flags first, then point index (Shape.cpp:2266 SortVertices)
+        // ClipLightMask = 0xF0000, ClipUserMask = 0xFF00000
+        constexpr uint32_t priorityMask = 0xFFF0000;
+        std::sort(sortEntries.begin(), sortEntries.end(),
+                  [priorityMask](const SortEntry& a, const SortEntry& b)
+                  {
+                      uint32_t priorA = static_cast<uint32_t>(a.flags) & priorityMask;
+                      uint32_t priorB = static_cast<uint32_t>(b.flags) & priorityMask;
+                      if (priorA != priorB)
+                          return priorA < priorB;
+                      if (a.pointIndex != b.pointIndex)
+                          return a.pointIndex < b.pointIndex;
+                      return a.originalIndex < b.originalIndex;
+                  });
+
+        std::vector<Vertex> sortedVertices;
+        sortedVertices.reserve(mesh.vertices.size());
+        for (const auto& entry : sortEntries)
+            sortedVertices.push_back(mesh.vertices[entry.originalIndex]);
+        mesh.vertices = std::move(sortedVertices);
+
+        std::vector<uint32_t> invSort(sortEntries.size());
+        for (uint32_t i = 0; i < sortEntries.size(); ++i)
+            invSort[sortEntries[i].originalIndex] = i;
+
+        for (auto& tri : mesh.triangles)
+            for (int i = 0; i < 3; ++i)
+                tri.indices[i] = invSort[tri.indices[i]];
+        for (auto& quad : mesh.quads)
+            for (int i = 0; i < 4; ++i)
+                quad.indices[i] = invSort[quad.indices[i]];
+        for (auto& selection : mesh.selections)
+            for (auto& vertIdx : selection.vertexIndices)
+                vertIdx = invSort[vertIdx];
+    }
+};
+
+} // namespace Poseidon::Asset::Formats

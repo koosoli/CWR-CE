@@ -1,0 +1,79 @@
+{
+  "version": 6,
+  "include": [
+    "base.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "win-clang-sanitizer",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL"
+      }
+    },
+    {
+      "name": "win-x64-clang-san",
+      "displayName": "Win x64 Clang ASan+UBSan",
+      "inherits": "win-clang-sanitizer",
+      "binaryDir": "${sourceDir}/build/win-x64-clang-san",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-clang-san",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/win-x64-clang-san.cmake"
+      }
+    },
+    {
+      "name": "win-x64-clang-fuzz",
+      "displayName": "Win x64 Clang libFuzzer + ASan (network)",
+      "inherits": "win-clang-sanitizer",
+      "binaryDir": "${sourceDir}/build/win-x64-clang-fuzz",
+      "cacheVariables": {
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-clang-static",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/win-x64-clang-fuzz.cmake",
+        "POSEIDON_BUILD_FUZZERS": "ON"
+      }
+    },
+    {
+      "name": "linux-clang-sanitizer",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "linux-x64-clang-fuzz",
+      "displayName": "Linux x64 Clang libFuzzer + ASan",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build/linux-x64-clang-fuzz",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-clang",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/linux-x64-clang-fuzz.cmake",
+        "POSEIDON_BUILD_FUZZERS": "ON"
+      }
+    },
+    {
+      "name": "linux-x64-clang-san",
+      "displayName": "Linux x64 Clang ASan+UBSan",
+      "inherits": "linux-clang-sanitizer",
+      "binaryDir": "${sourceDir}/build/linux-x64-clang-san",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux-clang-san",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/linux-x64-clang-san.cmake"
+      }
+    },
+    {
+      "name": "linux-x64-clang-tsan",
+      "displayName": "Linux x64 Clang TSan",
+      "inherits": "linux-clang-sanitizer",
+      "binaryDir": "${sourceDir}/build/linux-x64-clang-tsan",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux-clang-tsan",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/linux-x64-clang-tsan.cmake"
+      }
+    }
+  ]
+}

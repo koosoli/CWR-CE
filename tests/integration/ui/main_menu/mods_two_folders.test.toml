@@ -1,0 +1,6 @@
+# Local mods from tests/fixtures/mods (@fixturemod), downloaded mods from
+# tests/fixtures/workshop (@wsfixture). Game CWD under tri is the data dir
+# (packages/Remaster), so ../../tests/fixtures/... resolves to the repo fixtures.
+extra_args = ["--mods-dir", "../../tests/fixtures/mods", "--workshop-dir", "../../tests/fixtures/workshop"]
+timeout = 120
+tags = ["headful"]

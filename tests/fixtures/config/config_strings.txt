@@ -1,0 +1,56 @@
+class CfgVehicles {
+    class All {};
+    class Man : All {
+        scope = 0;
+        displayName = "$STR_DN_MAN";
+    };
+    class SyntheticSoldierWest : Man {
+        scope = 2;
+        displayName = "$STR_DN_SYNTH_SOLDIER_WEST";
+        side = 1;
+        weapons[] = {"SyntheticRifle", "Binocular"};
+    };
+    class SyntheticSoldierEast : Man {
+        scope = 2;
+        displayName = "$STR_DN_SOLDIER_EB";
+        side = 0;
+        weapons[] = {"AK74"};
+    };
+    class Tank : All {
+        scope = 0;
+        vehicleClass = "Armored";
+    };
+    class SyntheticTankAlpha : Tank {
+        scope = 2;
+        displayName = "$STR_DN_SYNTH_TANK_ALPHA";
+        model = "\Synthetic\vehicles\m1abrams.p3d";
+        armor = 900;
+        class Library {
+            libTextDesc = "$STR_LIB_SYNTH_TANK_ALPHA";
+        };
+        class Turret {
+            weapons[] = {"M256", "M240Coax"};
+            magazines[] = {"M256_SABOT", "M240_200Rnd"};
+        };
+    };
+};
+
+class CfgWeapons {
+    class Default {
+        scope = 0;
+        displayName = "";
+    };
+    class SyntheticRifle : Default {
+        scope = 2;
+        displayName = "$STR_DN_SYNTH_RIFLE";
+        displayNameMagazine = "$STR_DN_SYNTH_MAG";
+        reloadTime = 0.1;
+        modes[] = {"Single", "FullAuto"};
+    };
+};
+
+class CfgDifficulty {
+    skillFriendly = 0.5;
+    skillEnemy = 0.8;
+    labels[] = {"$STR_DIFF_EASY", "$STR_DIFF_NORMAL", "$STR_DIFF_HARD"};
+};

@@ -1,0 +1,2 @@
+tags = ["cursor", "editor", "ui", "exclusive", "headful"]
+timeout = 30

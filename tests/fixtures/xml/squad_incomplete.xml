@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<!DOCTYPE squad SYSTEM "squad.dtd">
+<squad nick="INCOMPLETE">
+  <name>Incomplete Squad</name>
+  <member id="12345678" nick="Player">
+    <name>Player Name</name>
+  </member>
+  <member id="87654321" nick="Player2">
+    <name>Another Player</name>
+    <email>player2@test.com</email>
+  </member>
+</squad>

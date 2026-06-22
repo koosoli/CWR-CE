@@ -1,0 +1,7 @@
+class Mission
+{
+    class Intel
+    {
+        briefingName = "$STR_DEMO_BRIEF_NAME";
+    };
+};

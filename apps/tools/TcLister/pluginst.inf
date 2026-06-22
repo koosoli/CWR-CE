@@ -1,0 +1,5 @@
+[plugininstall]
+description=OFP Lister Plugin (PAA/PAC textures)
+type=wlx
+file=ofp.wlx64
+defaultdir=ofp

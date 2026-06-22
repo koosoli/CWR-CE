@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PAPA BEAR Mods</title>
+    <link rel="stylesheet" href="/assets/site.css" />
+  </head>
+  <body data-page="mods">
+    <nav class="top-menu"></nav>
+
+    <h1 class="title">PAPA BEAR mods browser BETA</h1>
+
+    <div class="toolbar">
+      <label class="filter">
+        <span>filter</span>
+        <input id="mods-filter" type="search" placeholder="name or id" />
+      </label>
+      <span id="mods-status" class="status-line">Loading...</span>
+    </div>
+
+    <div class="browser-table-wrap">
+      <table id="mods-table">
+        <thead>
+          <tr>
+            <th class="column-mod">Mod</th>
+            <th class="column-version">Version</th>
+            <th class="column-size">Size</th>
+            <th class="column-links">Links</th>
+            <th class="column-action">Add</th>
+          </tr>
+        </thead>
+        <tbody id="mods-rows">
+          <tr>
+            <td colspan="5">Loading mods...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <script src="/assets/papa-bear.js"></script>
+  </body>
+</html>

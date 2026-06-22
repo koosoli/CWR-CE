@@ -1,0 +1,42 @@
+[package]
+name = "papa-bear-cli"
+version = "0.1.0"
+edition = "2021"
+description = "PapaBear workshop CLI: pack PBOs and publish mods (papa)"
+license = "MIT"
+rust-version = "1.79"
+
+[[bin]]
+name = "papa"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+papa-bear-archive = { path = "../Archive" }
+papa-bear-client = { path = "../Client" }
+serde_json = "1"
+# native-tls so HTTPS honours the OS trust store (openssl on Linux, schannel on
+# Windows) — unlike rustls' bundled Mozilla roots, this trusts internal CAs that
+# are installed system-wide. -k/--insecure flips on danger_accept_invalid_certs.
+native-tls = "0.2"
+ureq = { version = "2", default-features = false, features = ["native-tls", "json", "gzip"] }
+# zstdmt: multi-threaded compression so large mods (rcwc is 11 GB) pack in minutes, not ~30.
+zstd = { version = "0.13", features = ["zstdmt"] }
+tempfile = "3"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"

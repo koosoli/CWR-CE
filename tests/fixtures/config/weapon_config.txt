@@ -1,0 +1,92 @@
+class CfgWeapons {
+    class Default {
+        scope = 0;
+        type = 0;
+    };
+    
+    class Rifle : Default {
+        scope = 0;
+        type = 1;
+        reloadTime = 0.1;
+        magazineReloadTime = 3.0;
+        autoFire = 0;
+    };
+    
+    class SyntheticRifle : Rifle {
+        scope = 2;
+        displayName = "SyntheticRifle";
+        displayNameMagazine = "30Rnd STANAG";
+        shortNameMagazine = "5.56mm";
+        model = "\Synthetic\weapons\SyntheticMagazine\SyntheticRifle.p3d";
+        picture = "\Synthetic\weapons\SyntheticMagazine\equip_SyntheticRifle.paa";
+        magazines[] = {"SyntheticMagazine"};
+        reloadTime = 0.1;
+        magazineReloadTime = 3.6;
+        recoil = "SyntheticRifleRecoil";
+        recoilProne = "SyntheticRifleRecoilProne";
+        autoFire = 1;
+        burst = 3;
+        modes[] = {"Single", "Burst", "FullAuto"};
+        class Single {
+            displayName = "Semi";
+            burst = 1;
+            reloadTime = 0.1;
+        };
+        class Burst {
+            displayName = "Burst";
+            burst = 3;
+            reloadTime = 0.1;
+        };
+        class FullAuto {
+            displayName = "Full";
+            burst = 20;
+            reloadTime = 0.1;
+            autoFire = 1;
+        };
+    };
+    
+    class SyntheticSupport : Rifle {
+        scope = 2;
+        displayName = "SyntheticSupport";
+        displayNameMagazine = "100Rnd 7.62mm";
+        model = "\Synthetic\weapons\SyntheticSupport\SyntheticSupport.p3d";
+        picture = "\Synthetic\weapons\SyntheticSupport\equip_SyntheticSupport.paa";
+        magazines[] = {"SyntheticSupport"};
+        reloadTime = 0.1;
+        magazineReloadTime = 8.5;
+        autoFire = 1;
+        modes[] = {"FullAuto"};
+    };
+    
+    class SyntheticLauncher : Default {
+        scope = 2;
+        type = 4;
+        displayName = "Synthetic Launcher";
+        model = "\Synthetic\weapons\SyntheticRocket\SyntheticRocket.p3d";
+        picture = "\Synthetic\weapons\SyntheticRocket\equip_SyntheticRocket.paa";
+        magazines[] = {"SyntheticLauncher"};
+        reloadTime = 0.1;
+        magazineReloadTime = 1.0;
+    };
+    
+    class Binocular : Default {
+        scope = 2;
+        type = 0;
+        displayName = "Binoculars";
+        model = "\Synthetic\weapons\binoculars.p3d";
+    };
+    
+    class Throw : Default {
+        scope = 2;
+        type = 0;
+        displayName = "Throw";
+        magazines[] = {"HandGrenade"};
+    };
+    
+    class Put : Default {
+        scope = 2;
+        type = 0;
+        displayName = "Put";
+        magazines[] = {"Mine", "PipeBomb"};
+    };
+};

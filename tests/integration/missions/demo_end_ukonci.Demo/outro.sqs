@@ -1,0 +1,8 @@
+_camera = "camera" camCreate [6519.040039,149.663788,6473.679199]
+_camera cameraEffect ["internal","back"]
+~1
+uplkonec = true
+~2
+player cameraEffect ["terminate","back"]
+camDestroy _camera
+exit

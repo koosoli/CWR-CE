@@ -1,0 +1,67 @@
+mission = "tests/integration/missions/jip_basic.Demo"
+game_port = 2302
+
+[probes]
+interval_ms = 1000
+queries = ["ngs", "players", "von_state"]
+
+[[instances]]
+name = "server"
+type = "server"
+extra_args = ["--mp-auto-start", "2"]
+
+[[instances]]
+name = "p1"
+type = "client"
+connect = "server"
+after = "server"
+mp_assign = "WEST:1"
+
+[[instances]]
+name = "p2"
+type = "client"
+connect = "server"
+after = "server"
+mp_assign = "WEST:2"
+
+[[phases]]
+name = "tx-1"
+duration_ms = 4000
+
+[[phases.before_actions]]
+action = "script"
+role = "p1"
+script = "hooks/p1_tx.sqf"
+
+[[phases.before_actions]]
+action = "script"
+role = "p2"
+script = "hooks/p2_expect.sqf"
+
+[[phases]]
+name = "tx-2"
+duration_ms = 4000
+
+[[phases.before_actions]]
+action = "script"
+role = "p1"
+script = "hooks/p1_tx.sqf"
+
+[[phases.before_actions]]
+action = "script"
+role = "p2"
+script = "hooks/p2_expect.sqf"
+
+[[phases]]
+name = "tx-3"
+duration_ms = 4000
+
+[[phases.before_actions]]
+action = "script"
+role = "p1"
+script = "hooks/p1_tx.sqf"
+
+[[phases.before_actions]]
+action = "script"
+role = "p2"
+script = "hooks/p2_expect.sqf"

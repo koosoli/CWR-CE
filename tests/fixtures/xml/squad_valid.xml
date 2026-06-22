@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<!DOCTYPE squad SYSTEM "squad.dtd">
+<?xml-stylesheet href="squad.xsl" type="text/xsl"?>
+<squad nick="SQTAG">
+  <name>Example Squad</name>
+  <email>squad@example.com</email>
+  <web>http://www.examplesquad.com</web>
+  <picture>squad.paa</picture>
+  <title>Best Squad Ever - Est. 2001</title>
+  <member id="12345678" nick="Player1">
+    <name>John Doe</name>
+    <email>john@example.com</email>
+    <icq>123456789</icq>
+    <remark>Squad leader and founder. Veteran of many campaigns.</remark>
+  </member>
+  <member id="87654321" nick="Player2">
+    <name>Jane Smith</name>
+    <email>jane@example.com</email>
+    <icq>987654321</icq>
+    <remark>Veteran member since 2001. Sniper specialist.</remark>
+  </member>
+</squad>

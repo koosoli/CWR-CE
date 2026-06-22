@@ -1,0 +1,33 @@
+version=11.0;
+class Mission
+{
+    randomSeed=101;
+    class Intel
+    {
+        briefingName="$STR_VALID_BRIEFING_NAME";
+        viewDistance=900;
+    };
+    class Groups
+    {
+        items=1;
+        class Item0
+        {
+            side="WEST";
+            class Vehicles
+            {
+                items=1;
+                class Item0
+                {
+                    position[]={0,0,0};
+                    azimut=0;
+                    special="NONE";
+                    id=1;
+                    side="WEST";
+                    vehicle="Logic";
+                    leader=1;
+                    skill=0.5;
+                };
+            };
+        };
+    };
+};

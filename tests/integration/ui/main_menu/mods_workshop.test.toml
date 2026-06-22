@@ -1,0 +1,6 @@
+# Local fixture mod under --mods-dir (so we can prove Workshop rows merge alongside
+# Local ones). The real papa-bear.cz fetch is skipped under autotest; the workshop
+# rows here come from triSeedWorkshopMods (same MergeWorkshopMods path).
+extra_args = ["--mods-dir", "../../tests/fixtures/mods"]
+timeout = 120
+tags = ["headful"]

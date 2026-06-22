@@ -1,0 +1,9 @@
+class CfgSounds
+{
+	class testsay
+	{
+		name="testsay";
+		sound[]={"say.wav", db+0, 1.0};
+		titles[]={};
+	};
+};

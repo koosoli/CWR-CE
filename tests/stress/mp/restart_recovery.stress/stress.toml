@@ -1,0 +1,40 @@
+mission = "tests/integration/mp/jip_stress.Demo"
+game_port = 2302
+
+[probes]
+interval_ms = 1000
+queries = ["ngs", "players"]
+
+[[instances]]
+name = "server"
+type = "server"
+
+[[instances]]
+name = "anchor"
+type = "client"
+connect = "server"
+after = "server"
+mp_assign = "WEST:1"
+
+[[instances]]
+name = "primary"
+type = "client"
+connect = "server"
+after = "anchor"
+mp_assign = "WEST:2"
+
+[[phases]]
+name = "settle"
+duration_ms = 5000
+
+[[phases]]
+name = "restart-primary"
+duration_ms = 6000
+
+[[phases.before_actions]]
+action = "restart_role"
+role = "primary"
+
+[[phases]]
+name = "recover"
+duration_ms = 6000

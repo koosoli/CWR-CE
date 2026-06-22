@@ -1,0 +1,7 @@
+# Build context for docker/papa-bear-master-service/Dockerfile is mserver/.
+# Keep only the two Rust crates it needs; exclude everything else.
+*
+!Client
+!MasterService
+Client/target
+MasterService/target

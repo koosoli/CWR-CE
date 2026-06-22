@@ -1,0 +1,6 @@
+{
+    "modId": "fixturemod",
+    "name": "Fixture Mod",
+    "version": "1.2.3",
+    "description": "Tiny committed fixture mod for the MODS-screen scan/apply test. It includes one synthetic addon for mount/config coverage."
+}

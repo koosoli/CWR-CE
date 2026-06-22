@@ -1,0 +1,8 @@
+{
+  "version": 6,
+  "include": [
+    "cmake/presets/windows.json",
+    "cmake/presets/linux.json",
+    "cmake/presets/sanitizers.json"
+  ]
+}

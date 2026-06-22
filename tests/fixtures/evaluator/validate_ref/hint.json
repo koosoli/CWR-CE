@@ -1,0 +1,13 @@
+{
+  "name": "hint",
+  "arity": "unary",
+  "group": "ui",
+  "description": "Displays a hint message.",
+  "syntax": "hint text",
+  "return_type": "Nothing",
+  "arg_types": ["String"],
+  "examples": [
+    "hint \"hello world\"",
+    "hint format [\"%1 damage\", 0.5]"
+  ]
+}

@@ -1,0 +1,4 @@
+testString = "Hello World";
+testInt = 42;
+testFloat = 3.14;
+testBool = true;

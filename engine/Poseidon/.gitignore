@@ -1,0 +1,43 @@
+# Modernization progress tracking (local only)
+*.md
+tmp/
+
+# Build artifacts and intermediate files
+!Intermediate/
+!Bins/Win32/
+!Bins/x64/
+*.obj
+*.pch
+*.idb
+*.pdb
+*.ilk
+*.tlog
+*.log
+*.lastbuildstate
+*.unsuccessfulbuild
+
+# Visual Studio user-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.vs/
+
+# Build results
+[Dd]ebug/
+!Debug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+lib/lib___Win32_*/
+
+# Precompiled headers
+*.pch
+
+# Temporary files
+tmp/
+
+# Keep documentation
+*.md

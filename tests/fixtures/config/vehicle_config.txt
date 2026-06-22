@@ -1,0 +1,180 @@
+class CfgVehicles {
+    class All {};
+    class AllVehicles : All {};
+    class Land : AllVehicles {};
+    
+    class LandVehicle : Land {
+        scope = 0;
+        accuracy = 1.0;
+        cost = 10000;
+    };
+    
+    class Tank : LandVehicle {
+        scope = 0;
+        vehicleClass = "Armored";
+        accuracy = 0.3;
+        armor = 400;
+        cost = 500000;
+        maxSpeed = 60;
+        terrainCoef = 1.5;
+    };
+    
+    class SyntheticTankAlpha : Tank {
+        scope = 2;
+        displayName = "Synthetic Tank Alpha";
+        model = "\Synthetic\vehicles\m1abrams.p3d";
+        picture = "\Synthetic\vehicles\equip_m1abrams.paa";
+        armor = 900;
+        armorStructural = 6.0;
+        maxSpeed = 65.5;
+        turnSpeed = 0.8;
+        crew = "SoldierWCrew";
+        transportSoldier = 0;
+        driverCanEject = 0;
+        class Turret {
+            gunnerAction = "M1Gunner";
+            gunnerInAction = "M1GunnerIn";
+            gunnerOpticsModel = "\Synthetic\optika_gunner_tank";
+            gunnerForceOptics = 1;
+            weapons[] = {"M256", "M240Coax"};
+            magazines[] = {"M256_SABOT", "M256_SABOT", "M256_HEAT", "M256_HEAT", "M240_200Rnd", "M240_200Rnd", "M240_200Rnd"};
+            soundServo[] = {"", 0.01, 1.0};
+        };
+        class Damage {
+            tex[] = {};
+            mat[] = {
+                "Synthetic\vehicles\data\m1abrams.rvmat",
+                "Synthetic\vehicles\data\m1abrams_damage.rvmat",
+                "Synthetic\vehicles\data\m1abrams_destruct.rvmat"
+            };
+        };
+    };
+    
+    class SyntheticTankBeta : Tank {
+        scope = 2;
+        displayName = "T-72";
+        model = "\Synthetic\vehicles\t72.p3d";
+        picture = "\Synthetic\vehicles\equip_t72.paa";
+        side = 0;
+        faction = "EAST";
+        armor = 750;
+        maxSpeed = 60;
+        crew = "SoldierECrew";
+        class Turret {
+            gunnerAction = "SyntheticTankBetaGunner";
+            weapons[] = {"2A46M", "PKT"};
+            magazines[] = {"2A46M_APFSDS", "2A46M_APFSDS", "2A46M_HE", "PKT_200Rnd", "PKT_200Rnd"};
+        };
+    };
+    
+    class Car : LandVehicle {
+        scope = 0;
+        vehicleClass = "Car";
+        accuracy = 0.5;
+    };
+    
+    class Jeep : Car {
+        scope = 2;
+        displayName = "M151A2 Jeep";
+        model = "\Synthetic\vehicles\jeep.p3d";
+        picture = "\Synthetic\vehicles\equip_jeep.paa";
+        crew = "SyntheticSoldierWest";
+        transportSoldier = 3;
+        side = 1;
+        faction = "WEST";
+    };
+    
+    class Truck : Car {
+        scope = 0;
+        transportSoldier = 12;
+    };
+    
+    class M113 : Tank {
+        scope = 2;
+        displayName = "M113";
+        model = "\Synthetic\vehicles\m113.p3d";
+        armor = 80;
+        transportSoldier = 10;
+        class Turret {
+            weapons[] = {"M2"};
+            magazines[] = {"M2_100Rnd", "M2_100Rnd"};
+        };
+    };
+    
+    class Air : AllVehicles {
+        scope = 0;
+        vehicleClass = "Air";
+    };
+    
+    class Helicopter : Air {
+        scope = 0;
+        vehicleClass = "Air";
+    };
+    
+    class AH1Z : Helicopter {
+        scope = 2;
+        displayName = "AH-1Z Viper";
+        model = "\Synthetic\air\ah1z.p3d";
+        picture = "\Synthetic\air\equip_ah1z.paa";
+        side = 1;
+        faction = "WEST";
+        crew = "HelicopterPilotW";
+        armor = 40;
+        class Library {
+            libTextDesc = "Attack helicopter armed with machine gun and rocket pods";
+        };
+        class Turrets {
+            class MainTurret {
+                gunnerAction = "AH1Gunner";
+                weapons[] = {"M197", "FFARLauncher"};
+                magazines[] = {"M197_750Rnd", "FFAR_19Rnd", "FFAR_19Rnd"};
+            };
+        };
+    };
+    
+    class SyntheticHeli : Helicopter {
+        scope = 2;
+        displayName = "Synthetic Utility Helicopter";
+        model = "\Synthetic\air\complex_vehicle.p3d";
+        side = 1;
+        faction = "WEST";
+        transportSoldier = 10;
+        class Turrets {
+            class LeftDoorGun {
+                weapons[] = {"M134_minigun"};
+                magazines[] = {"M134_3000Rnd"};
+            };
+            class RightDoorGun {
+                weapons[] = {"M134_minigun"};
+                magazines[] = {"M134_3000Rnd"};
+            };
+        };
+    };
+    
+    class Man : Land {
+        scope = 2;
+        vehicleClass = "Men";
+        displayName = "Soldier";
+        model = "\Synthetic\soldiers\soldierWB.p3d";
+        weapons[] = {};
+        magazines[] = {};
+        accuracy = 1.0;
+    };
+    
+    class SyntheticSoldierWest : Man {
+        displayName = "US Soldier";
+        side = 1;
+        faction = "WEST";
+        weapons[] = {"SyntheticRifle", "Binocular", "Throw", "Put"};
+        magazines[] = {"SyntheticMagazine", "SyntheticMagazine", "SyntheticMagazine", "SyntheticMagazine", "HandGrenade", "HandGrenade"};
+    };
+    
+    class SyntheticSoldierEast : Man {
+        displayName = "Soviet Soldier";
+        side = 0;
+        faction = "EAST";
+        model = "\Synthetic\soldiers\soldierEB.p3d";
+        weapons[] = {"AK74", "Throw", "Put"};
+        magazines[] = {"AK74", "AK74", "AK74", "AK74", "HandGrenade"};
+    };
+};

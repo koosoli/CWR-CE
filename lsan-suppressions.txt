@@ -1,0 +1,12 @@
+# lsan-suppressions.txt
+# Known LSan false positives: Meyer's singletons, process-lifetime
+# singletons, and memory pool allocators whose destructors / cleanup run
+# at static-destruction time (after LSan's exit check), or that
+# intentionally retain freed blocks for reuse.
+leak:GGameState
+leak:NetMessagePool
+leak:FastCAlloc
+# Test deliberately leaks a ref-counted object to verify partial Release()
+leak:test_pointers.cpp
+# Network peer tests create peers that aren't fully cleaned up
+leak:peerfactory.cpp

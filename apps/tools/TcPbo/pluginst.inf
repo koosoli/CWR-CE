@@ -1,0 +1,6 @@
+[plugininstall]
+description=PBO Archive Plugin for Operation Flashpoint
+type=wcx
+file=pbo.wcx64
+defaultdir=pbo
+defaultextension=pbo

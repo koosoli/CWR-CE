@@ -1,0 +1,57 @@
+mission = "tests/integration/mp/jip_stress.eden"
+game_port = 2302
+
+[probes]
+interval_ms = 1000
+queries = ["ngs", "players", "von_state"]
+
+[[instances]]
+name = "server"
+type = "server"
+network_port = 2303
+extra_args = ["--mp-auto-start", "2"]
+
+[[instances]]
+name = "client1"
+type = "client"
+network_port = 2304
+connect_port = 2303
+connect = "server"
+after = "server"
+mp_assign = "WEST:1"
+
+[[instances]]
+name = "client2"
+type = "client"
+network_port = 2305
+connect_port = 2303
+connect = "server"
+after = "server"
+mp_assign = "WEST:2"
+
+[[phases]]
+name = "settle"
+duration_ms = 3000
+
+[[phases]]
+name = "soak"
+duration_ms = 15000
+
+[[phases]]
+name = "verify"
+duration_ms = 8000
+
+[[phases.after_actions]]
+action = "script"
+role = "server"
+script = "hooks/server_expect_play.sqf"
+
+[[phases.after_actions]]
+action = "script"
+role = "client1"
+script = "hooks/client1_expect_play.sqf"
+
+[[phases.after_actions]]
+action = "script"
+role = "client2"
+script = "hooks/client2_expect_play.sqf"

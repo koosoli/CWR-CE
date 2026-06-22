@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PAPA BEAR Server</title>
+    <link rel="stylesheet" href="/assets/site.css" />
+  </head>
+  <body data-page="browser-detail">
+    <nav class="top-menu"></nav>
+
+    <a href="/browser" class="back-link">BACK</a>
+
+    <h1 id="detail-title" class="title">Loading server...</h1>
+    <div id="detail-summary" class="status-line">Loading...</div>
+
+    <section class="detail-panel detail-page">
+      <div id="detail-facts" class="detail-facts">Loading...</div>
+      <div class="detail-columns detail-top-grid">
+        <section class="detail-section">
+          <div class="detail-label">PLAYERS</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Role</th>
+              </tr>
+            </thead>
+            <tbody id="detail-players">
+              <tr>
+                <td colspan="2">-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+        <section class="detail-section">
+          <div class="detail-label">MODS</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Mod</th>
+                <th>Version</th>
+                <th>Links</th>
+              </tr>
+            </thead>
+            <tbody id="detail-mods">
+              <tr>
+                <td colspan="3">-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <div class="detail-columns detail-bottom-grid">
+        <section class="detail-section">
+          <div class="detail-label">PLAYER HISTORY</div>
+          <div id="detail-history" class="history-chart">-</div>
+        </section>
+        <section class="detail-section">
+          <div class="detail-label">RECENT SESSIONS</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Mission</th>
+                <th>Played</th>
+                <th>Peak</th>
+                <th>Ended</th>
+              </tr>
+            </thead>
+            <tbody id="detail-sessions">
+              <tr>
+                <td colspan="4">-</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </div>
+    </section>
+
+    <script src="/assets/papa-bear.js"></script>
+  </body>
+</html>

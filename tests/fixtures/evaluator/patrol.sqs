@@ -1,0 +1,23 @@
+; Patrol script - a unit patrols between waypoints
+; Usage: [soldier, [[100,0,200],[300,0,400],[100,0,600]]] exec "patrol.sqs"
+
+_unit = _this select 0
+_waypoints = _this select 1
+_wpCount = count _waypoints
+_currentWP = 0
+
+? _wpCount == 0 : exit
+
+#patrol
+_pos = _waypoints select _currentWP
+_unit setPos _pos
+~1
+hint format ["%1 reached waypoint %2 at %3", name _unit, _currentWP, _pos]
+
+_currentWP = _currentWP + 1
+? _currentWP >= _wpCount : goto "done"
+goto "patrol"
+
+#done
+hint format ["%1 patrol complete (%2 waypoints)", name _unit, _wpCount]
+exit

@@ -1,0 +1,124 @@
+#pragma once
+
+#include <cctype>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <string_view>
+
+namespace Poseidon
+{
+} // namespace Poseidon
+
+
+namespace MissionPathLoader
+{
+
+struct Selection
+{
+    std::string missionFilePath;
+    std::string missionParentDirectory;
+    std::string missionName;
+    std::string worldName;
+};
+
+class Loader
+{
+public:
+    static std::optional<std::string> ResolveMissionFile(const std::filesystem::path& inputPath)
+    {
+        std::error_code ec;
+        std::filesystem::path candidate = inputPath;
+        if (std::filesystem::is_directory(candidate, ec))
+        {
+            if (ec)
+            {
+                return std::nullopt;
+            }
+            candidate /= "mission.sqm";
+        }
+
+        candidate = candidate.lexically_normal();
+        const std::string filename = NormalizeSeparators(candidate.filename().string());
+        if (!EqualsIgnoreCase(filename, "mission.sqm"))
+        {
+            return std::nullopt;
+        }
+
+        if (!std::filesystem::exists(candidate, ec) || ec)
+        {
+            return std::nullopt;
+        }
+
+        return NormalizeSeparators(candidate.generic_string());
+    }
+
+    static std::optional<Selection> DescribeMissionFile(std::string_view missionFilePath)
+    {
+        std::string normalized = NormalizeSeparators(missionFilePath);
+        const size_t missionFileSlash = normalized.rfind('/');
+        if (missionFileSlash == std::string::npos)
+        {
+            return std::nullopt;
+        }
+
+        if (!EqualsIgnoreCase(normalized.substr(missionFileSlash + 1), "mission.sqm"))
+        {
+            return std::nullopt;
+        }
+
+        std::string missionDirectory = normalized.substr(0, missionFileSlash);
+        const size_t missionDirectorySlash = missionDirectory.rfind('/');
+        const std::string folder =
+            missionDirectorySlash == std::string::npos ? missionDirectory : missionDirectory.substr(missionDirectorySlash + 1);
+
+        const size_t dot = folder.rfind('.');
+        if (dot == std::string::npos || dot == 0 || dot + 1 >= folder.size())
+        {
+            return std::nullopt;
+        }
+
+        Selection selection;
+        selection.missionFilePath = std::move(normalized);
+        selection.missionParentDirectory =
+            missionDirectorySlash == std::string::npos ? "" : missionDirectory.substr(0, missionDirectorySlash + 1);
+        selection.missionName = folder.substr(0, dot);
+        selection.worldName = folder.substr(dot + 1);
+        return selection;
+    }
+
+private:
+    static std::string NormalizeSeparators(std::string_view input)
+    {
+        std::string normalized(input);
+        for (char& ch : normalized)
+        {
+            if (ch == '\\')
+            {
+                ch = '/';
+            }
+        }
+        return normalized;
+    }
+
+    static bool EqualsIgnoreCase(std::string_view left, std::string_view right)
+    {
+        if (left.size() != right.size())
+        {
+            return false;
+        }
+
+        for (size_t i = 0; i < left.size(); ++i)
+        {
+            const unsigned char lhs = static_cast<unsigned char>(left[i]);
+            const unsigned char rhs = static_cast<unsigned char>(right[i]);
+            if (std::tolower(lhs) != std::tolower(rhs))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+
+} // namespace MissionPathLoader

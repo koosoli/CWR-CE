@@ -1,0 +1,25 @@
+class Config
+{
+    setting1 = "value1";
+    setting2 = 123;
+    
+    class Video
+    {
+        resolution = "1920x1080";
+        fullscreen = true;
+        vsync = false;
+    };
+    
+    class Audio
+    {
+        masterVolume = 0.8;
+        musicVolume = 0.6;
+        effectsVolume = 1.0;
+    };
+};
+
+class GameSettings
+{
+    difficulty = 2;
+    saveOnExit = true;
+};

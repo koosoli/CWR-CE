@@ -1,0 +1,7 @@
+class Mission
+{
+    class Intel
+    {
+        briefingName="$STR_CAMPAIGN_PROGRESS_TEST_BRIEF";
+    };
+};

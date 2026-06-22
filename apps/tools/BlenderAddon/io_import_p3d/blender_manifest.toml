@@ -1,0 +1,9 @@
+schema_version = "1.0.0"
+id = "io_import_p3d"
+version = "1.0.0"
+name = "Poseidon P3D Model Importer"
+tagline = "Import Poseidon engine P3D models"
+maintainer = "CWR Project"
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]

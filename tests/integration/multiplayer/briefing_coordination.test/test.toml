@@ -1,0 +1,26 @@
+mission = "tests/integration/missions/jip_basic.Demo"
+
+tags = ["headful"]
+
+[[instances]]
+extra_args = ["--no-strict"]
+name = "server"
+type = "server"
+
+[[instances]]
+extra_args = ["--no-strict"]
+name = "client1"
+type = "client"
+connect = "server"
+after = "server"
+wait_ngs = 13
+mp_assign = "WEST:1"
+
+[[instances]]
+extra_args = ["--no-strict"]
+name = "client2"
+type = "client"
+connect = "server"
+after = "server"
+wait_ngs = 13
+mp_assign = "WEST:2"

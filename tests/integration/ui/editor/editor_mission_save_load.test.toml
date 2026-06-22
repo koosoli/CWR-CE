@@ -1,0 +1,7 @@
+tags = ["exclusive", "headful"]
+binary = "PoseidonGame"
+package = "packages/Remaster"
+script = "tests/integration/ui/editor/editor_mission_save_load.test.sqf"
+# Entering the editor loads a full island landscape, which is slow under the
+# autotest renderer; the save/load dialogs add a few more frames on top.
+timeout = 180

@@ -1,0 +1,45 @@
+LANGUAGE,English
+STR_DISP_CLOSE,Close
+STR_DISABLED,Disabled
+STR_ENABLED,Enabled
+STR_DISP_MAIN_OPT_CLOSE_DESC,Close this page.
+STR_DISP_MAIN_OPT_DISPLAY,Display
+STR_DISP_MAIN_OPT_DISPLAY_STYLE_DESC,Choose whether the display uses the modern widescreen-aware presentation or the original classic framing.
+STR_DISP_MAIN_OPT_DISPLAY_ULTRAWIDE_CLAMP_DESC,Limit very wide displays to a comfortable gameplay area while preserving readable interface composition.
+STR_DISP_MAIN_OPT_GAME,Game
+STR_DISP_MAIN_OPT_GAME_VIEW_DISTANCE,Visibility distance
+STR_DISP_MAIN_OPT_GAME_RESPECT_MISSION_VIEW_DISTANCE,Respect mission visibility
+STR_DISP_MAIN_OPT_GAME_VIEW_DISTANCE_FORMAT,%d m
+STR_DISP_OPT_CTL_KBM,Keyboard & Mouse
+STR_DISP_OPT_CTL_GAMEPAD,Gamepad
+STR_DISP_OPT_CTL_GAMEPAD_GROUP_MOVEMENT,Movement
+STR_DISP_OPT_CTL_GAMEPAD_GROUP_AIM,Aim
+STR_DISP_OPT_CTL_GAMEPAD_GROUP_FREELOOK,Freelook
+STR_DISP_OPT_CTL_GAMEPAD_TUNING,Gamepad Tuning
+STR_DISP_OPT_CTL_GAMEPAD_ENABLED,Gamepad enabled
+STR_DISP_OPT_CTL_GAMEPAD_STICK_DEADZONE,Stick deadzone
+STR_DISP_OPT_CTL_GAMEPAD_TRIGGER_DEADZONE,Trigger deadzone
+STR_DISP_OPT_CTL_GAMEPAD_LOOK_SENSITIVITY,Look sensitivity
+STR_DISP_OPT_CTL_GAMEPAD_ENABLED_DESC,Master switch for gamepad input. Disable to ignore the controller entirely.
+STR_DISP_OPT_CTL_GAMEPAD_STICK_DEADZONE_DESC,Center deadzone for the analog sticks. Range 0% to 50% of full deflection.
+STR_DISP_OPT_CTL_GAMEPAD_TRIGGER_DEADZONE_DESC,Activation threshold for the analog triggers. Range 0% to 50%.
+STR_DISP_OPT_CTL_GAMEPAD_LOOK_SENSITIVITY_DESC,Right-stick look-aim sensitivity. Range 0.1x to 5.0x.
+STR_DISP_OPT_CTL_CATEGORY,Category
+STR_DISP_OPT_CTL_CATEGORY_DESC,Filter the binding list by activity context.
+STR_DISP_OPT_CTL_BINDING_DESC,Press Enter to rebind. Esc to cancel during capture.
+STR_DISP_OPT_CTL_RESET_CAT,Reset category
+STR_DISP_OPT_CTL_RESET_CAT_DESC,Restore default %s bindings for this category only.
+STR_DISP_OPT_CTL_CAT_ONFOOT,On foot
+STR_DISP_OPT_CTL_CAT_VEHICLES,Vehicles
+STR_DISP_OPT_CTL_CAT_PILOT,Pilot
+STR_DISP_OPT_CTL_CAT_GUNNER,Gunner
+STR_DISP_OPT_CTL_CAT_COMMON,Common
+STR_DISP_OPT_CTL_MOUSE,Mouse
+STR_DISP_OPT_MOUSE_REVERSE_Y,Y-axis inversion
+STR_DISP_OPT_MOUSE_SWAP_BUTTONS,Mouse buttons swap
+STR_DISP_OPT_MOUSE_SENSITIVITY_X,Mouse sensitivity X
+STR_DISP_OPT_MOUSE_SENSITIVITY_Y,Mouse sensitivity Y
+STR_DISP_OPT_MOUSE_REVERSE_Y_DESC,Invert vertical mouse motion - pushing the mouse forward looks down.
+STR_DISP_OPT_MOUSE_SWAP_BUTTONS_DESC,Swap left and right mouse buttons.
+STR_DISP_OPT_MOUSE_SENSITIVITY_X_DESC,Horizontal mouse sensitivity. Range 0.5x to 2.0x.
+STR_DISP_OPT_MOUSE_SENSITIVITY_Y_DESC,Vertical mouse sensitivity. Range 0.5x to 2.0x.

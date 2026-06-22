@@ -1,0 +1,52 @@
+# Valgrind memcheck suppressions for the OFPR engine.
+#
+# These are all the SAME false positive: optimized glibc SIMD string ops
+# (strncpy / strchr/index / strlen and the engine's strcatLtd, which inlines
+# strncpy) read aligned 16/32-byte words that extend past the logical NUL
+# terminator into uninitialised-but-unused bytes. The NUL detection result is
+# correct; memcheck only flags that the over-read word contained uninitialised
+# bytes. Confirmed against PoseidonCoreTests (832 reports, all this class, 0
+# real uninit reads behind them). Pass with --suppressions=valgrind-suppressions.supp.
+
+{
+   glibc-simd-strncpy-cond
+   Memcheck:Cond
+   ...
+   fun:strncpy
+}
+{
+   glibc-simd-strncpy-value8
+   Memcheck:Value8
+   ...
+   fun:strncpy
+}
+{
+   glibc-simd-index-cond
+   Memcheck:Cond
+   ...
+   fun:index
+}
+{
+   glibc-simd-index-value8
+   Memcheck:Value8
+   ...
+   fun:index
+}
+{
+   glibc-simd-is_overlap-cond
+   Memcheck:Cond
+   ...
+   fun:is_overlap
+}
+{
+   engine-strcatLtd-simd-cond
+   Memcheck:Cond
+   fun:strcatLtd
+   ...
+}
+{
+   engine-strcatLtd-simd-value8
+   Memcheck:Value8
+   fun:strcatLtd
+   ...
+}

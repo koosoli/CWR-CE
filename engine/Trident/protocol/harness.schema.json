@@ -1,0 +1,133 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Trident Harness Protocol",
+  "description": "JSON-over-TCP protocol between game harness (C++) and Trident orchestrator (Rust). Newline-delimited JSON (one object per line).",
+  "version": 1,
+  "commands": {
+    "ping": {
+      "description": "Health check",
+      "params": {},
+      "response": { "ok": "bool" }
+    },
+    "describe": {
+      "description": "List all available commands and events with their schemas",
+      "params": {},
+      "response": {
+        "ok": "bool",
+        "version": "int",
+        "commands": "[{name, params}]",
+        "events": "[{name, fields}]"
+      }
+    },
+    "key": {
+      "description": "Inject SDL scancode key press (down + up)",
+      "params": {
+        "sc": { "type": "int", "required": true, "description": "SDL_Scancode value" },
+        "mod": { "type": "int", "required": false, "description": "SDL_Keymod flags", "default": 0 },
+        "hold": { "type": "bool", "required": false, "description": "If true, only key down (no up)", "default": false }
+      },
+      "response": { "ok": "bool" }
+    },
+    "key_up": {
+      "description": "Release a held key",
+      "params": {
+        "sc": { "type": "int", "required": true }
+      },
+      "response": { "ok": "bool" }
+    },
+    "click": {
+      "description": "Click a UI control by IDC",
+      "params": {
+        "idc": { "type": "int", "required": true, "description": "Control IDC to click" }
+      },
+      "response": { "ok": "bool" }
+    },
+    "query": {
+      "description": "Query game state",
+      "params": {
+        "what": {
+          "type": "string",
+          "required": true,
+          "enum": ["display", "players", "mission", "world", "von_state"]
+        }
+      },
+      "response": { "ok": "bool", "data": "object (varies by what)" }
+    },
+    "screenshot": {
+      "description": "Capture screenshot to file",
+      "params": {
+        "path": { "type": "string", "required": true, "description": "Output PNG path" }
+      },
+      "response": { "ok": "bool", "path": "string" }
+    },
+    "wait_display": {
+      "description": "Block until specified display IDD is shown",
+      "params": {
+        "idd": { "type": "int", "required": true },
+        "timeout_ms": { "type": "int", "required": false, "default": 30000 }
+      },
+      "response": { "ok": "bool", "idd": "int" }
+    },
+    "eval": {
+      "description": "Evaluate SQF expression and return result as string",
+      "params": {
+        "code": { "type": "string", "required": true, "description": "SQF expression to evaluate" }
+      },
+      "response": { "ok": "bool", "result": "string" }
+    },
+    "exec": {
+      "description": "Execute SQF code (fire-and-forget, no return value)",
+      "params": {
+        "code": { "type": "string", "required": true, "description": "SQF code to execute" }
+      },
+      "response": { "ok": "bool" }
+    },
+    "exit": {
+      "description": "Request clean game shutdown",
+      "params": {},
+      "response": { "ok": "bool" }
+    }
+  },
+  "events": {
+    "ready": {
+      "description": "Game initialized, first display shown",
+      "fields": { "idd": "int" }
+    },
+    "display": {
+      "description": "Active display changed",
+      "fields": { "idd": "int", "name": "string?" }
+    },
+    "log": {
+      "description": "Structured log message (from spdlog sink)",
+      "fields": { "level": "string", "cat": "string", "msg": "string" }
+    },
+    "player_joined": {
+      "description": "Player connected to server",
+      "fields": { "dpid": "int", "name": "string" }
+    },
+    "player_left": {
+      "description": "Player disconnected",
+      "fields": { "dpid": "int", "name": "string" }
+    },
+    "mission_state": {
+      "description": "Server game state transition",
+      "fields": { "state": "string", "prev": "string" }
+    },
+    "von_received": {
+      "description": "Voice data received from another player",
+      "fields": { "sender": "int", "frames": "int" }
+    },
+    "von_speaker_start": {
+      "description": "VoN speaker started playing",
+      "fields": { "channel": "int" }
+    },
+    "von_speaker_stop": {
+      "description": "VoN speaker drained/stopped",
+      "fields": { "channel": "int" }
+    },
+    "exit": {
+      "description": "Game shutting down",
+      "fields": { "code": "int" }
+    }
+  }
+}

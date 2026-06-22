@@ -1,0 +1,7 @@
+class CfgSounds
+{
+    class StockSubdirLine
+    {
+        sound[] = {"line.ogg", 1, 1};
+    };
+};

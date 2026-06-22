@@ -1,0 +1,329 @@
+#include <Poseidon/Asset/Probes/WaveToLip.hpp>
+#include <catch2/catch_test_macros.hpp>
+
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <catch2/catch_message.hpp>
+
+using namespace Poseidon;
+
+namespace
+{
+constexpr int kSr = 44100;
+constexpr int kFrameSamples = static_cast<int>(0.04 * kSr); // 1764
+
+// One frame of constant amplitude -- high-frequency delta on every sample so
+// the energy sum is predictable.  Returns max-amplitude alternating ±A signal.
+std::vector<int16_t> AlternatingSquare(int frames, int amplitude)
+{
+    std::vector<int16_t> out;
+    out.reserve(frames * kFrameSamples);
+    int sign = +1;
+    for (int i = 0; i < frames * kFrameSamples; i++)
+    {
+        out.push_back(static_cast<int16_t>(sign * amplitude));
+        sign = -sign;
+    }
+    return out;
+}
+} // namespace
+
+TEST_CASE("LipBucketForEnergy maps thresholds correctly", "[lip]")
+{
+    REQUIRE(LipBucketForEnergy(0.00) == 0);
+    REQUIRE(LipBucketForEnergy(0.05) == 0);
+    REQUIRE(LipBucketForEnergy(0.06) == 1);
+    REQUIRE(LipBucketForEnergy(0.20) == 1);
+    REQUIRE(LipBucketForEnergy(0.35) == 2);
+    REQUIRE(LipBucketForEnergy(0.50) == 3);
+    REQUIRE(LipBucketForEnergy(0.65) == 4);
+    REQUIRE(LipBucketForEnergy(0.80) == 5);
+    REQUIRE(LipBucketForEnergy(0.95) == 6);
+    REQUIRE(LipBucketForEnergy(0.96) == 7);
+    REQUIRE(LipBucketForEnergy(1.00) == 7);
+    REQUIRE(LipBucketForEnergy(2.00) == 7); // clamps gracefully
+}
+
+TEST_CASE("ComputeLipRows handles edge cases", "[lip]")
+{
+    SECTION("empty input -> no rows")
+    {
+        REQUIRE(ComputeLipRows(nullptr, 0, kSr).empty());
+    }
+    SECTION("invalid sample rate -> no rows")
+    {
+        std::vector<int16_t> samples(1000, 0);
+        REQUIRE(ComputeLipRows(samples.data(), samples.size(), 0).empty());
+    }
+    SECTION("less than one frame -> no rows")
+    {
+        std::vector<int16_t> samples(100, 0);
+        REQUIRE(ComputeLipRows(samples.data(), samples.size(), kSr).empty());
+    }
+    SECTION("pure silence -> no rows (max energy is zero, can't normalize)")
+    {
+        std::vector<int16_t> samples(kFrameSamples * 5, 0);
+        REQUIRE(ComputeLipRows(samples.data(), samples.size(), kSr).empty());
+    }
+}
+
+TEST_CASE("ComputeLipRows constant amplitude -> single mouth-open row + terminator", "[lip]")
+{
+    auto samples = AlternatingSquare(10, 16000);
+    auto rows = ComputeLipRows(samples.data(), samples.size(), kSr);
+
+    // Every frame has identical (max) energy -> normalized = 1.0 for every
+    // frame -> phase 7 for every frame.  Compaction collapses to one row at
+    // t=0 plus the terminator at end.
+    REQUIRE(rows.size() == 2);
+    REQUIRE(rows[0].time == 0.0);
+    REQUIRE(rows[0].phase == 7);
+    REQUIRE(rows[1].phase == -1);
+    REQUIRE(rows[1].time > 0.0);
+}
+
+TEST_CASE("ComputeLipRows compacts repeated phases into a single emit", "[lip]")
+{
+    // Build 10 frames with the same energy in frames 0..4 and same lower
+    // energy in frames 5..9 -- should produce two phase entries (one per
+    // distinct level) plus the terminator.
+    std::vector<int16_t> samples;
+    samples.reserve(10 * kFrameSamples);
+    auto pushFrame = [&](int amp)
+    {
+        int sign = +1;
+        for (int i = 0; i < kFrameSamples; i++)
+        {
+            samples.push_back(static_cast<int16_t>(sign * amp));
+            sign = -sign;
+        }
+    };
+    for (int i = 0; i < 5; i++)
+        pushFrame(16000); // loud
+    for (int i = 0; i < 5; i++)
+        pushFrame(2000); // quiet (~12.5% of loud -> bucket 1)
+
+    auto rows = ComputeLipRows(samples.data(), samples.size(), kSr);
+    REQUIRE(rows.size() == 3);
+    REQUIRE(rows[0].time == 0.0);
+    REQUIRE(rows[0].phase == 7); // loudest -> top bucket
+    REQUIRE(rows[1].phase == 1); // quieter -> bucket 1
+    REQUIRE(rows[1].time > 0.0);
+    REQUIRE(rows[2].phase == -1); // terminator
+}
+
+TEST_CASE("ComputeLipRows time advances by frame size", "[lip]")
+{
+    // Two distinct loudness levels -- the second emit should land at exactly
+    // (frame index) * (frameSamples / sampleRate).
+    std::vector<int16_t> samples;
+    samples.reserve(4 * kFrameSamples);
+    int sign = +1;
+    for (int i = 0; i < 2 * kFrameSamples; i++)
+    {
+        samples.push_back(static_cast<int16_t>(sign * 16000));
+        sign = -sign;
+    }
+    sign = +1;
+    for (int i = 0; i < 2 * kFrameSamples; i++)
+    {
+        samples.push_back(static_cast<int16_t>(sign * 1000)); // ~6% of loud -> bucket 1
+        sign = -sign;
+    }
+    auto rows = ComputeLipRows(samples.data(), samples.size(), kSr);
+    REQUIRE(rows.size() >= 2);
+    const double expected = 2.0 * static_cast<double>(kFrameSamples) / kSr;
+    REQUIRE(std::abs(rows[1].time - expected) < 1e-9);
+}
+
+// BIS reference fixtures (tests/fixtures/audio/wave-to-lip/)
+//
+// The fixture set pairs real 16-bit mono WAVs (one English voice line, one
+// Czech) with `.lip` ground truth generated by Arma 3's `WAVToLIP.exe` from
+// the official BIS Sound Tools.  Any change to ComputeLipRows that drifts
+// away from BIS gets caught here.
+//
+// Provenance:
+//   voice_en.wav        ffmpeg -i sound/s02v_101.ogg       -ac 1 -ar 22050 -sample_fmt s16
+//   voice_cz.wav        ffmpeg -i sound/s02v_101.Czech.ogg -ac 1 -ar 22050 -sample_fmt s16
+//   voice_en.bis.lip    "$ARMA3_TOOLS/Audio/WAVToLIP.exe" voice_en.wav
+//   voice_cz.bis.lip    "$ARMA3_TOOLS/Audio/WAVToLIP.exe" voice_cz.wav
+
+namespace
+{
+struct WavMono16
+{
+    std::vector<int16_t> samples;
+    int sampleRate = 0;
+};
+
+// Tiny RIFF/WAVE parser tailored to our 16-bit mono fixtures.  Skips RIFF
+// header chunks we don't care about (e.g. ffmpeg's "LIST INFO"/"ISFT") and
+// returns mono PCM samples + the sample rate.  Returns false on any format
+// it doesn't recognise so the test fails loudly rather than reading noise.
+bool LoadMonoWav(const std::filesystem::path& path, WavMono16& out)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+        return false;
+    char riff[12];
+    in.read(riff, sizeof(riff));
+    if (in.gcount() != sizeof(riff) || std::memcmp(riff, "RIFF", 4) != 0 || std::memcmp(riff + 8, "WAVE", 4) != 0)
+        return false;
+
+    bool fmtSeen = false;
+    bool dataSeen = false;
+    while (in && !dataSeen)
+    {
+        char tag[4];
+        uint32_t size = 0;
+        in.read(tag, 4);
+        in.read(reinterpret_cast<char*>(&size), 4);
+        if (in.gcount() != 4)
+            break;
+        if (std::memcmp(tag, "fmt ", 4) == 0)
+        {
+            std::vector<char> body(size);
+            in.read(body.data(), size);
+            if (size < 16)
+                return false;
+            const uint16_t format = *reinterpret_cast<const uint16_t*>(body.data() + 0);
+            const uint16_t channels = *reinterpret_cast<const uint16_t*>(body.data() + 2);
+            const uint32_t sampleRate = *reinterpret_cast<const uint32_t*>(body.data() + 4);
+            const uint16_t bits = *reinterpret_cast<const uint16_t*>(body.data() + 14);
+            if (format != 1 || channels != 1 || bits != 16)
+                return false;
+            out.sampleRate = static_cast<int>(sampleRate);
+            fmtSeen = true;
+        }
+        else if (std::memcmp(tag, "data", 4) == 0)
+        {
+            out.samples.resize(size / 2);
+            in.read(reinterpret_cast<char*>(out.samples.data()), size);
+            dataSeen = true;
+        }
+        else
+        {
+            in.seekg(size, std::ios::cur);
+            // RIFF chunks are word-aligned; skip pad byte if size is odd.
+            if (size & 1)
+                in.seekg(1, std::ios::cur);
+        }
+    }
+    return fmtSeen && dataSeen;
+}
+
+// Read a BIS reference `.lip` file into a normalised line list.  Each line is
+// `frame = X.Debug marker` (header), `T.TTT, P` (frame), or `T.TTT, -1` (terminator).
+// We compare line-by-line so any drift surfaces with the exact `time, phase`
+// pair that diverges.
+std::vector<std::string> ReadLipLines(const std::filesystem::path& path)
+{
+    std::vector<std::string> lines;
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line))
+    {
+        // Strip CR (BIS writes CRLF; std::getline on Windows handles LF only).
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        if (!line.empty())
+            lines.push_back(line);
+    }
+    return lines;
+}
+
+// Format a LipRow back to the BIS text representation (3-decimal time, %.0f
+// phase) so we can compare directly against the .lip fixture lines.
+std::string FormatLipRow(const LipRow& r)
+{
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%.3f, %.0f", r.time, static_cast<double>(r.phase));
+    return buf;
+}
+} // namespace
+
+namespace
+{
+void RunBisReferenceCase(const char* wavStem)
+{
+    namespace fs = std::filesystem;
+    const fs::path fixtureDir = fs::path(TESTS_ROOT_DIR) / "fixtures" / "audio" / "wave-to-lip";
+    const fs::path wavPath = fixtureDir / (std::string(wavStem) + ".wav");
+    const fs::path lipPath = fixtureDir / (std::string(wavStem) + ".bis.lip");
+
+    REQUIRE(fs::exists(wavPath));
+    REQUIRE(fs::exists(lipPath));
+
+    WavMono16 wav;
+    REQUIRE(LoadMonoWav(wavPath, wav));
+    REQUIRE_FALSE(wav.samples.empty());
+
+    const std::vector<std::string> expected = ReadLipLines(lipPath);
+    REQUIRE_FALSE(expected.empty());
+    REQUIRE(expected.front() == "frame = 0.040");
+
+    const std::vector<LipRow> rows = ComputeLipRows(wav.samples.data(), wav.samples.size(), wav.sampleRate);
+
+    // Build the actual line list the same way WriteLipFile would: header,
+    // then one line per row.  Terminator (-1) is included.
+    std::vector<std::string> actual;
+    actual.reserve(rows.size() + 1);
+    actual.emplace_back("frame = 0.040");
+    for (const auto& r : rows)
+        actual.push_back(FormatLipRow(r));
+
+    // Per-line diff so a failure shows exactly where Poseidon diverges from
+    // BIS (e.g. "frame 7: BIS '0.280, 5' vs Poseidon '0.280, 2'").
+    INFO("wav: " << wavPath.string());
+    INFO("ref: " << lipPath.string());
+    REQUIRE(actual.size() == expected.size());
+    for (size_t i = 0; i < expected.size(); i++)
+    {
+        INFO("line " << i << ": expected='" << expected[i] << "' actual='" << actual[i] << "'");
+        CHECK(actual[i] == expected[i]);
+    }
+}
+} // namespace
+
+TEST_CASE("ComputeLipRows matches BIS WAVToLIP on an English voice line", "[lip][bis-reference]")
+{
+    RunBisReferenceCase("voice_en");
+}
+
+TEST_CASE("ComputeLipRows matches BIS WAVToLIP on a Czech voice line", "[lip][bis-reference]")
+{
+    RunBisReferenceCase("voice_cz");
+}
+
+// Regression: stereo voice (e.g. x08strikes dx08v*.ogg, 16-bit stereo) used to be
+// rejected outright by ComputeLipRowsFromAudio (`nChannels != 1` -> error 2), so no
+// lip could be generated for any file the engine plays in stereo. DownmixToMono now
+// collapses any channel layout to a mono track the energy pass understands.
+TEST_CASE("DownmixToMono averages channels to a single mono track", "[lip]")
+{
+    const int16_t mono[] = {100, -200, 300};
+    auto m = DownmixToMono(mono, 3, 1);
+    REQUIRE(m.size() == 3);
+    REQUIRE(m[0] == 100);
+    REQUIRE(m[2] == 300);
+
+    // interleaved L,R per frame -> per-frame average
+    const int16_t stereo[] = {100, 300, -400, -200, 1000, 0};
+    auto s = DownmixToMono(stereo, 6, 2);
+    REQUIRE(s.size() == 3);
+    REQUIRE(s[0] == 200);  // (100+300)/2
+    REQUIRE(s[1] == -300); // (-400+-200)/2
+    REQUIRE(s[2] == 500);  // (1000+0)/2
+
+    // channels <= 0 is treated as mono passthrough; null/empty is safe
+    REQUIRE(DownmixToMono(mono, 3, 0).size() == 3);
+    REQUIRE(DownmixToMono(nullptr, 0, 2).empty());
+}

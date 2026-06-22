@@ -1,0 +1,78 @@
+# Build outputs
+/build/
+/dist/
+/bin/
+/obj/
+**/vcpkg_installed/
+CMakeUserPresets.json
+
+# Local/runtime output
+/tmp/
+/logs/
+*.log
+*.rpt
+*.dmp
+context.bin
+mpreport.txt
+net*.log
+id.bin
+lock*.txt
+imgui.ini
+.trident.env
+.trident_history
+
+# Local game data and fixtures
+/assets/
+/packages/
+/tests/integration/missions/*/sound/
+!/tests/integration/missions/sound_preload.Demo/sound/
+!/tests/integration/missions/sound_preload.Demo/sound/say.wav
+/tests/integration/missions/**/*.paa
+/deploy/creds.txt
+/deploy/**/values-prod.yaml
+/deploy/**/values.prod.yml
+/deploy/infra/charts/
+*.zip
+
+# Generated reports
+validate-report.json
+docs/out/
+coverage/
+
+# Tool/editor state
+/.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.db
+*.opendb
+*.ipch
+*.tlog
+tags
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Rust
+target/
+**/target/
+
+# Local binaries and shared libraries produced by builds
+*.dll
+*.dylib
+*.so
+*.pdb
+*.exe
+
+# Render/test output
+*.bmp
+*.png
+!resources/**/*.png
+!docs/**/*.png
+!tests/missions/screenshot/**/*.bmp
+!tests/missions/screenshot/**/*.png

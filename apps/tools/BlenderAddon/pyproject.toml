@@ -1,0 +1,58 @@
+[project]
+name = "io-import-p3d"
+version = "1.0.0"
+description = "Blender addon for importing Poseidon P3D models and RTM animations"
+requires-python = ">=3.11"
+license = "GPL-3.0-or-later"
+readme = "README.md"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.11",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+src = ["io_import_p3d"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "SIM",
+    "RUF",
+]
+ignore = [
+    "E501",
+    "E701",
+    "E402",
+    "E741",
+    "B007",
+    "B010",
+    "B905",
+    "SIM108",
+    "SIM105",
+    "RUF012",
+    "RUF059",
+    "UP031",
+    "F841",
+    "SIM102",
+    "SIM118",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/*" = ["B011"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+addopts = "-q --tb=short"

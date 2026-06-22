@@ -1,0 +1,58 @@
+; Mission init script - sets up groups, positions, triggers patrol
+; Simulates a typical synthetic mission init.sqs
+
+; Create friendly forces
+_grpW = createGroup west
+_lead = createUnit ["SyntheticOfficerWest", [100,0,100], _grpW]
+_sold1 = createUnit ["SyntheticSoldierWest", [105,0,100], _grpW]
+_sold2 = createUnit ["SyntheticSoldierWest", [110,0,100], _grpW]
+
+hint format ["West group: %1 units, leader: %2", count (units _grpW), typeOf (leader _grpW)]
+
+; Create enemy forces
+_grpE = createGroup east
+_enemy1 = createUnit ["SoldierEB", [500,0,500], _grpE]
+_enemy2 = createUnit ["SoldierEB", [510,0,500], _grpE]
+
+hint format ["East group: %1 units", count (units _grpE)]
+
+; Set up player position
+player setPos [50,0,50]
+player setDir 45
+
+; Create a supply vehicle
+_truck = createVehicle ["Truck", [80,0,90]]
+_truck setVariable ["cargo", "ammo"]
+_truck setVariable ["capacity", 100]
+
+hint format ["Supply truck cargo: %1, capacity: %2", _truck getVariable "cargo", _truck getVariable "capacity"]
+
+; Check distances
+_dist = player distance _lead
+hint format ["Distance to squad leader: %1", _dist]
+
+; Verify all units alive
+_allAlive = true
+? !(alive _lead) : _allAlive = false
+? !(alive _sold1) : _allAlive = false
+? !(alive _sold2) : _allAlive = false
+hint format ["All west units alive: %1", _allAlive]
+
+; Simulate casualty
+_enemy1 setDammage 1.0
+hint format ["Enemy1 alive: %1, damage: %2", alive _enemy1, getDammage _enemy1]
+
+; Count remaining enemies
+_enemyUnits = units _grpE
+_aliveCount = 0
+_i = 0
+#countLoop
+? _i >= count _enemyUnits : goto "countDone"
+? alive (_enemyUnits select _i) : _aliveCount = _aliveCount + 1
+_i = _i + 1
+goto "countLoop"
+#countDone
+
+hint format ["Enemy alive: %1 of %2", _aliveCount, count _enemyUnits]
+
+exit

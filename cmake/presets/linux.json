@@ -1,0 +1,72 @@
+{
+  "version": 6,
+  "include": [
+    "base.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "linux-clang-debug",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "linux-clang-relwithdebinfo",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    },
+    {
+      "name": "linux-clang-release",
+      "hidden": true,
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "linux-x64-clang",
+      "displayName": "Linux x64 Clang Debug",
+      "inherits": "linux-clang-debug",
+      "binaryDir": "${sourceDir}/build/linux-x64-clang",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux-clang",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/linux-x64-clang.cmake"
+      }
+    },
+    {
+      "name": "linux-x64-clang-rwdi",
+      "displayName": "Linux x64 Clang RelWithDebInfo",
+      "inherits": "linux-clang-relwithdebinfo",
+      "binaryDir": "${sourceDir}/build/linux-x64-clang-rwdi",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux-clang",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/linux-x64-clang.cmake"
+      }
+    },
+    {
+      "name": "linux-x64-steamrt4",
+      "displayName": "Linux x64 Steam Runtime 4 RelWithDebInfo",
+      "inherits": "linux-clang-relwithdebinfo",
+      "binaryDir": "${sourceDir}/build/linux-x64-steamrt4",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux-clang",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/linux-x64-clang.cmake"
+      }
+    },
+    {
+      "name": "linux-x64-clang-rel",
+      "displayName": "Linux x64 Clang Release",
+      "inherits": "linux-clang-release",
+      "binaryDir": "${sourceDir}/build/linux-x64-clang-rel",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux-clang",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/linux-x64-clang.cmake"
+      }
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<!DOCTYPE squad SYSTEM "squad.dtd">
+<squad nick="MIN">
+  <name>Minimal Squad</name>
+  <member id="12345678" nick="Player">
+    <name>Player Name</name>
+  </member>
+</squad>

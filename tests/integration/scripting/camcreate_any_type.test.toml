@@ -1,0 +1,4 @@
+tags = ["scripting", "fizzy-164", "headless"]
+binary = "PoseidonGame"
+mission = "tests/integration/missions/jeep_lock_regression.Demo"
+timeout = 60

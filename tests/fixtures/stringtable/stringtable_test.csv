@@ -1,0 +1,12 @@
+LANGUAGE,English,Czech,German
+STR_HELLO,Hello,Ahoj,Hallo
+STR_GOODBYE,Goodbye,Sbohem,Auf Wiedersehen
+STR_WEAPON_RIFLE,"Synthetic Rifle","Synthetic puska","Synthetic Gewehr"
+STR_YES,Yes,Ano,Ja
+STR_NO,No,Ne,Nein
+COMMENT,This is a comment line
+STR_MULTILINE,"Line one
+Line two","První øádek
+Druhý øádek","Zeile eins
+Zeile zwei"
+STR_QUOTED,"He said ""hello""","Øekl ""ahoj""","Er sagte ""hallo"""

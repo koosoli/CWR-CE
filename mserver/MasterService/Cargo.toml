@@ -1,0 +1,45 @@
+[package]
+name = "papa-bear-master-service"
+version = "0.1.0"
+edition = "2021"
+description = "PAPA BEAR game service foundation for OFP networking"
+license = "MIT"
+rust-version = "1.79"
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.7", features = ["multipart"] }
+clap = { version = "4", features = ["derive"] }
+csv = "1"
+getrandom = "0.2"
+papa-bear-client = { path = "../Client" }
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "any", "sqlite", "postgres", "macros"] }
+object_store = { version = "0.11", features = ["aws"] }
+reqwest = { version = "0.12", default-features = false }
+bytes = "1"
+futures = "0.3"
+unicode-normalization = "0.1"
+ureq = { version = "2", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+utoipa = { version = "5", features = ["axum_extras", "yaml"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"

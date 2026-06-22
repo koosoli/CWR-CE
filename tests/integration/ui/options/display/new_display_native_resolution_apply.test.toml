@@ -1,0 +1,2 @@
+tags = ["exclusive", "headless"]
+extra_args = ["--no-strict"]

@@ -1,0 +1,53 @@
+mission = "tests/integration/mp/jip_stress.Demo"
+game_port = 2302
+
+[probes]
+interval_ms = 1000
+queries = ["ngs", "players"]
+
+[[instances]]
+name = "server"
+type = "server"
+
+[[instances]]
+name = "anchor"
+type = "client"
+connect = "server"
+after = "server"
+mp_assign = "WEST:1"
+
+[[instances]]
+name = "wave"
+type = "client"
+connect = "server"
+after = "anchor"
+mp_assign = "WEST:2"
+autostart = false
+
+[[phases]]
+name = "settle"
+duration_ms = 4000
+
+[[phases]]
+name = "join-wave"
+duration_ms = 5000
+
+[[phases.before_actions]]
+action = "start_role"
+role = "wave"
+
+[[phases]]
+name = "leave-wave"
+duration_ms = 5000
+
+[[phases.before_actions]]
+action = "stop_role"
+role = "wave"
+
+[[phases]]
+name = "rejoin-wave"
+duration_ms = 5000
+
+[[phases.before_actions]]
+action = "start_role"
+role = "wave"

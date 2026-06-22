@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PAPA BEAR</title>
+    <link rel="stylesheet" href="/assets/site.css" />
+  </head>
+  <body data-page="landing">
+    <nav class="top-menu"></nav>
+
+    <section class="landing-hero">
+      <h1 class="title">PAPA BEAR</h1>
+      <div id="landing-service" class="status-line">Loading service summary...</div>
+      <div class="landing-links">
+        <a href="/browser" class="back-link">OPEN VERIFIED SERVERS</a>
+        <a href="/mods" class="back-link">BROWSE MODS</a>
+      </div>
+    </section>
+
+    <section id="landing-summary" class="landing-summary">
+      <article class="detail-panel landing-card">
+        <div class="detail-label">PUBLIC VERIFIED SERVERS</div>
+        <div id="landing-public-count" class="landing-number">-</div>
+        <div id="landing-public-status" class="server-subline">Loading...</div>
+      </article>
+      <article class="detail-panel landing-card">
+        <div class="detail-label">PUBLIC PLAYERS NOW</div>
+        <div id="landing-player-count" class="landing-number">-</div>
+        <div class="server-subline">Observer-gated browser totals</div>
+      </article>
+      <article class="detail-panel landing-card">
+        <div class="detail-label">KNOWN MODS</div>
+        <div id="landing-mod-count" class="landing-number">-</div>
+        <div class="server-subline">Catalog rows available in PAPA BEAR</div>
+      </article>
+    </section>
+
+    <section class="landing-drilldowns">
+      <article class="detail-panel landing-card">
+        <div class="detail-label">SELF-REPORTED HIDDEN</div>
+        <div id="landing-self-reported-count" class="landing-number">-</div>
+        <div class="server-subline">Fresh publishes waiting for observer confirmation</div>
+        <div class="landing-links">
+          <a href="/browser?verification=self_reported" class="back-link">INSPECT PENDING</a>
+        </div>
+      </article>
+      <article class="detail-panel landing-card">
+        <div class="detail-label">UNREACHABLE HIDDEN</div>
+        <div id="landing-unreachable-count" class="landing-number">-</div>
+        <div class="server-subline">Rows kept for inspection after observer failures</div>
+        <div class="landing-links">
+          <a href="/browser?verification=unreachable" class="back-link">INSPECT UNREACHABLE</a>
+        </div>
+      </article>
+    </section>
+
+    <section class="detail-panel detail-page">
+      <div class="detail-header">
+        <div class="detail-label">TOP VERIFIED SERVERS</div>
+        <a href="/browser">See full browser</a>
+      </div>
+      <div class="browser-table-wrap">
+        <table id="landing-table">
+          <thead>
+            <tr>
+              <th class="column-id">#</th>
+              <th class="column-server">Server</th>
+              <th class="column-mission">Mission / Mods</th>
+              <th class="column-status">Status</th>
+              <th class="column-players">Players</th>
+              <th class="column-address">Address</th>
+            </tr>
+          </thead>
+          <tbody id="landing-rows">
+            <tr>
+              <td colspan="6">Loading public server list...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <script src="/assets/papa-bear.js"></script>
+  </body>
+</html>

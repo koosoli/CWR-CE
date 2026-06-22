@@ -1,0 +1,141 @@
+class CfgPatches {
+    class CustomAddon {
+        units[] = {"CustomRifleman", "CustomGrenadier", "CustomMedic", "CustomTank"};
+        weapons[] = {"CustomRifle"};
+        requiredVersion = 1.85;
+        requiredAddons[] = {"CARescue", "CAWeapons"};
+        author = "Custom Addon Team";
+        version = "1.0";
+    };
+};
+
+class CfgFactionClasses {
+    class CustomFaction {
+        displayName = "Custom Armed Forces";
+        priority = 10;
+        side = 1;
+        icon = "\CustomAddon\data\faction_icon.paa";
+    };
+};
+
+class CfgVehicleClasses {
+    class CustomInfantry {
+        displayName = "Custom Infantry";
+    };
+};
+
+class CfgWeapons {
+    class Rifle;
+    class SyntheticRifle : Rifle {};
+    
+    class CustomRifle : SyntheticRifle {
+        scope = 2;
+        displayName = "Custom Battle Rifle";
+        displayNameMagazine = "40Rnd Custom Mag";
+        model = "\CustomAddon\weapons\custom_rifle.p3d";
+        picture = "\CustomAddon\weapons\equip_custom_rifle.paa";
+        magazines[] = {"CustomMag"};
+        reloadTime = 0.08;
+        magazineReloadTime = 3.0;
+        recoil = "CustomRifleRecoil";
+        modes[] = {"Single", "Burst", "FullAuto"};
+    };
+};
+
+class CfgMagazines {
+    class CA_Magazine;
+    class SyntheticMagazine : CA_Magazine {};
+    
+    class CustomMag : SyntheticMagazine {
+        scope = 2;
+        displayName = "40Rnd Custom Magazine";
+        ammo = "B_556x45_Ball";
+        count = 40;
+        initSpeed = 950;
+        picture = "\CustomAddon\data\equip_custom_mag.paa";
+        model = "\CustomAddon\weapons\mag_custom.p3d";
+    };
+};
+
+class CfgVehicles {
+    class All {};
+    class AllVehicles : All {};
+    class Land : AllVehicles {};
+    class Man : Land {};
+    class Soldier : Man {};
+    class SyntheticSoldierWest : Soldier {};
+    
+    class CustomRifleman : SyntheticSoldierWest {
+        scope = 2;
+        displayName = "Custom Rifleman";
+        vehicleClass = "CustomInfantry";
+        side = 1;
+        faction = "CustomFaction";
+        model = "\CustomAddon\soldiers\custom_soldier.p3d";
+        weapons[] = {"CustomRifle", "Binocular", "Throw", "Put"};
+        magazines[] = {"CustomMag", "CustomMag", "CustomMag", "CustomMag", "CustomMag", "HandGrenade", "HandGrenade"};
+        respawnWeapons[] = {"CustomRifle", "Binocular", "Throw", "Put"};
+        respawnMagazines[] = {"CustomMag", "CustomMag", "CustomMag", "CustomMag", "CustomMag", "HandGrenade", "HandGrenade"};
+        class EventHandlers {
+            init = "_this exec ""\CustomAddon\scripts\init.sqs""";
+        };
+    };
+    
+    class CustomGrenadier : CustomRifleman {
+        displayName = "Custom Grenadier";
+        weapons[] = {"CustomRifle", "SyntheticLauncher", "Throw", "Put"};
+        magazines[] = {"CustomMag", "CustomMag", "CustomMag", "SyntheticGrenadeRound", "SyntheticGrenadeRound", "SyntheticGrenadeRound", "HandGrenade", "HandGrenade"};
+    };
+    
+    class CustomMedic : CustomRifleman {
+        displayName = "Custom Medic";
+        attendant = 1;
+        icon = "\CustomAddon\data\medic_icon.paa";
+        backpack = "MedicBackpack";
+    };
+    
+    class Tank;
+    class SyntheticTankAlpha : Tank {};
+    
+    class CustomTank : SyntheticTankAlpha {
+        scope = 2;
+        displayName = "Custom MBT";
+        faction = "CustomFaction";
+        vehicleClass = "CustomArmor";
+        model = "\CustomAddon\vehicles\custom_tank.p3d";
+        picture = "\CustomAddon\vehicles\equip_custom_tank.paa";
+        armor = 1000;
+        class Turret {
+            gunnerAction = "CustomTankGunner";
+            weapons[] = {"CustomCannon", "M240Coax"};
+            magazines[] = {"CustomCannon_APFSDS", "CustomCannon_APFSDS", "CustomCannon_HEAT", "M240_200Rnd", "M240_200Rnd"};
+        };
+        class Damage {
+            tex[] = {};
+            mat[] = {
+                "CustomAddon\vehicles\data\custom_tank.rvmat",
+                "CustomAddon\vehicles\data\custom_tank_damage.rvmat",
+                "CustomAddon\vehicles\data\custom_tank_destruct.rvmat"
+            };
+        };
+    };
+};
+
+class CfgAmmo {
+    class BulletCore;
+    class B_556x45_Ball : BulletCore {};
+    
+    class CustomBullet : B_556x45_Ball {
+        hit = 12;
+        typicalSpeed = 950;
+        caliber = 1.2;
+    };
+};
+
+class CfgSounds {
+    class CustomRifleShot {
+        name = "CustomRifleShot";
+        sound[] = {"\CustomAddon\sounds\rifle_shot.wss", db+5, 1.0, 900};
+        titles[] = {};
+    };
+};

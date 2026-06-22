@@ -1,0 +1,3 @@
+; SQS with _this parameter
+hint format ["arg: %1", _this select 0]
+exit

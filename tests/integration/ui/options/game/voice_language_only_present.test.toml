@@ -1,0 +1,3 @@
+tags = ["ui", "options", "voice", "locale", "fizzy-24", "headless"]
+no_autotest = true
+timeout = 60

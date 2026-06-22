@@ -1,0 +1,5 @@
+tags = ["scripting", "fizzy-235", "headless"]
+binary = "PoseidonGame"
+mission = "tests/integration/missions/command_menu_basic.Demo"
+timeout = 180
+extra_args = ["--dev"]

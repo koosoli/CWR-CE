@@ -1,0 +1,7 @@
+class Mission
+{
+    class Intel
+    {
+        viewDistance = 600;
+    };
+};

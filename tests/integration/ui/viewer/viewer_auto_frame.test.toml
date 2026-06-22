@@ -1,0 +1,9 @@
+no_menu = true
+timeout = 30
+extra_args = [
+    "--viewer",
+    "--model", "../../tests/fixtures/studio/vehicle.p3d",
+    "--focus",
+    "--no-help"
+]
+tags = ["headful"]

@@ -1,0 +1,5 @@
+This is a simple text file for testing QIFStream input operations.
+It contains multiple lines of text.
+Line 3: Some data here
+Line 4: More test data
+Final line with no newline at end

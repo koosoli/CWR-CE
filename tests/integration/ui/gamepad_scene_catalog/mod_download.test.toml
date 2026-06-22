@@ -1,0 +1,3 @@
+tags = ["exclusive", "headful", "gamepad-scene-catalog"]
+timeout = 45
+extra_args = ["--mods-dir", "../../tests/fixtures/mods"]

@@ -1,0 +1,69 @@
+diff --git a/al/source.cpp b/al/source.cpp
+index 77f8bfa..695575c 100644
+--- a/al/source.cpp
++++ b/al/source.cpp
+@@ -41,6 +41,7 @@
+ #include <stdexcept>
+ #include <string>
+ #include <string_view>
++#include <thread>
+ #include <tuple>
+ #include <type_traits>
+ #include <unordered_map>
+@@ -782,6 +783,39 @@ void FreeSource(ALCcontext *context, ALsource *source)
+         vchg->mState = VChangeState::Stop;
+ 
+         SendVoiceChanges(context, vchg);
++
++        /* A Voice references its sample buffers through raw pointers with no
++         * reference count, so destroying the source below (which drops its
++         * buffer-queue refs) followed by an alDeleteBuffers can free sample
++         * storage the mixer is still reading, faulting on the mixer thread. The
++         * Stop queued above is applied asynchronously: the mixer clears the
++         * voice's buffer pointers (and mPendingChange) only when it processes
++         * the change on a mix pass. Wait for that before the source's buffers
++         * are released.
++         *
++         * Bound the wait by the device mix counter so it can never spin forever.
++         * While the counter advances the mixer is live and will process the stop
++         * within a pass or two. Once it stops advancing -- idle, stopped or
++         * disconnected device -- no mix pass can be reading the voice, so it is
++         * safe to stop waiting. yield() (not a bare spin) keeps a live mixer's
++         * thread runnable; the steady-clock deadline caps a genuinely idle
++         * device at a few mix periods. */
++        auto *device = context->mALDevice.get();
++        auto lastmix = device->waitForMix();
++        auto idleUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
++        while(voice->mPendingChange.load(std::memory_order_acquire)
++            && device->Connected.load(std::memory_order_acquire))
++        {
++            std::this_thread::yield();
++            const auto nowmix = device->waitForMix();
++            if(nowmix != lastmix)
++            {
++                lastmix = nowmix;
++                idleUntil = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
++            }
++            else if(std::chrono::steady_clock::now() >= idleUntil)
++                break;
++        }
+     }
+ 
+     std::destroy_at(source);
+diff --git a/core/voice.cpp b/core/voice.cpp
+index 31214f0..87e1828 100644
+--- a/core/voice.cpp
++++ b/core/voice.cpp
+@@ -542,8 +542,10 @@ void LoadBufferStatic(VoiceBufferItem *buffer, VoiceBufferItem *bufferLoopItem,
+         const size_t intPos{(dataPosInt < loopEnd) ? dataPosInt
+             : (((dataPosInt-loopStart)%(loopEnd-loopStart)) + loopStart)};
+ 
+-        /* Load what's left of this loop iteration */
+-        const size_t remaining{std::min(voiceSamples.size(), loopEnd-dataPosInt)};
++        /* Load what's left of this loop iteration. Measure the remainder from
++         * the wrapped position intPos (always < loopEnd), not the raw dataPosInt
++         * which can exceed loopEnd and underflow this size_t subtraction. */
++        const size_t remaining{std::min(voiceSamples.size(), loopEnd-intPos)};
+         LoadSamples(voiceSamples.first(remaining), buffer->mSamples, srcChannel, intPos,
+             sampleType, srcStep, buffer->mBlockAlign);
+         voiceSamples = voiceSamples.subspan(remaining);

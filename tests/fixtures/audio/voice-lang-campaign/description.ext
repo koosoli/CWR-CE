@@ -1,0 +1,15 @@
+// Synthetic campaign fixture for campaign-level CfgSounds voice override coverage.
+// FindSound prefixes this entry with BaseDirectory + "dtaExt\\" and then
+// prefers sound/test_campaign.Czech.ogg when the selected voice language is Czech.
+
+class CfgSounds
+{
+    sounds[] = { test_campaign };
+
+    class test_campaign
+    {
+        name = "test_campaign";
+        sound[] = { "sound/test_campaign.ogg", db-40, 1.0 };
+        titles[] = { 0, "" };
+    };
+};

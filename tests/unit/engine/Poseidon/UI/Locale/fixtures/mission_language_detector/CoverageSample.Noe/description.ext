@@ -1,0 +1,7 @@
+class CfgSounds
+{
+    class RadioLine
+    {
+        sound[] = {"radio.ogg", 1, 1};
+    };
+};

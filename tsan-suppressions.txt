@@ -1,0 +1,24 @@
+# ThreadSanitizer suppressions for manual TSan runs of the game, e.g.
+#   TSAN_OPTIONS="suppressions=$(pwd)/tsan-suppressions.txt:halt_on_error=0" \
+#     xvfb-run -a build/linux-x64-clang-tsan/apps/cwr/Game/PoseidonGame \
+#     --window --render=gl33 --no-splash -C packages/Remaster --remount-selftest
+#
+# These silence races *internal to third-party libraries* that run their own background
+# threads (image decoding, font/text shaping, GL driver). They are not engine code and not
+# our bug; suppressing them leaves a clean, actionable signal for engine races. The engine's
+# own parallel terrain-generation path is race-free (atomic RefCount + the ParallelFor
+# TSan barrier annotation in TaskPool.cpp) — do NOT add engine symbols here to hide a real race.
+
+called_from_lib:libglycin-2.so          # GdkPixbuf/glycin image loader worker threads
+called_from_lib:libglib-2.0.so          # GLib thread pool / GMainContext internals
+called_from_lib:libgio-2.0.so           # GIO async I/O threads
+called_from_lib:libgobject-2.0.so       # GObject type system
+called_from_lib:libpango-1.0.so         # Pango text layout
+called_from_lib:libpangoft2-1.0.so      # Pango FreeType backend
+called_from_lib:libpangocairo-1.0.so    # Pango Cairo backend
+called_from_lib:libcairo.so             # Cairo rendering
+called_from_lib:libfontconfig.so        # Fontconfig cache threads
+called_from_lib:libharfbuzz.so          # HarfBuzz shaping
+called_from_lib:libgallium             # Mesa Gallium GL driver worker threads
+called_from_lib:libGLX_mesa.so          # Mesa GLX
+called_from_lib:libdbus-1.so            # D-Bus worker thread

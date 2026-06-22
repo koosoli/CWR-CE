@@ -1,0 +1,9 @@
+// Various comment styles
+value1 = 123;  // Single line comment
+
+/* Multi-line comment
+   spanning multiple lines
+   should be ignored */
+value2 = 456;
+
+// Comment at end of file

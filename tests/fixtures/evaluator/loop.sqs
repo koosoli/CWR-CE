@@ -1,0 +1,10 @@
+; Simple SQS test script
+; Tests labels, goto, and conditional execution
+_x = 0
+#loop
+_x = _x + 1
+? _x >= 3 : goto "done"
+goto "loop"
+#done
+hint format ["count: %1", _x]
+exit

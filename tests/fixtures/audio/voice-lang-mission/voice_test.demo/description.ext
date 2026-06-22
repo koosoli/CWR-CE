@@ -1,0 +1,17 @@
+// Synthetic test mission for voice-language lip-suffix coverage.
+// One CfgSounds entry referencing sound/test_voice.ogg.  Both base
+// (English) and .Czech variants of the .ogg and .lip ship alongside
+// so FindSound's WithLangSuffix step picks up the Czech override
+// at runtime when the voice language is set to "Czech".
+
+class CfgSounds
+{
+    sounds[] = { test_voice };
+
+    class test_voice
+    {
+        name = "test_voice";
+        sound[] = { "sound/test_voice.ogg", db-40, 1.0 };
+        titles[] = { 0, "" };
+    };
+};

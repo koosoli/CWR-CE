@@ -1,0 +1,2 @@
+extra_args = ["--no-sound", "--focus", "--no-menu-scene"]
+tags = ["headless"]

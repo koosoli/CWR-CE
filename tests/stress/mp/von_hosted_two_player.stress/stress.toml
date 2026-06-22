@@ -1,0 +1,80 @@
+game_port = 2302
+
+[probes]
+interval_ms = 1000
+queries = ["ngs", "players", "connections", "roles"]
+
+[[instances]]
+name = "host"
+type = "client"
+extra_args = ["--no-strict"]
+
+[[instances]]
+name = "joiner"
+type = "client"
+connect = "host"
+connect_host = "127.0.0.1"
+connect_port = 2302
+after = "host"
+wait_ngs = 2
+autostart = false
+extra_args = ["--no-strict"]
+
+[[phases]]
+name = "join"
+duration_ms = 1000
+
+[[phases.before_actions]]
+action = "start_role"
+role = "joiner"
+
+[[phases]]
+name = "select-mission"
+duration_ms = 1000
+
+[[phases.before_actions]]
+action = "script"
+role = "host"
+script = "hooks/host_select_mission.sqf"
+
+[[phases]]
+name = "assign-roles"
+duration_ms = 5000
+
+[[phases.before_actions]]
+action = "script"
+role = "host"
+script = "hooks/host_assign.sqf"
+
+[[phases.before_actions]]
+action = "script"
+role = "joiner"
+script = "hooks/joiner_assign.sqf"
+
+[[phases]]
+name = "start-play"
+duration_ms = 1000
+
+[[phases.before_actions]]
+action = "script"
+role = "host"
+script = "hooks/host_play.sqf"
+
+[[phases.before_actions]]
+action = "script"
+role = "joiner"
+script = "hooks/joiner_play.sqf"
+
+[[phases]]
+name = "host-to-joiner-von"
+duration_ms = 3000
+
+[[phases.before_actions]]
+action = "script"
+role = "host"
+script = "hooks/host_tx.sqf"
+
+[[phases.before_actions]]
+action = "script"
+role = "joiner"
+script = "hooks/joiner_expect.sqf"

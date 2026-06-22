@@ -1,0 +1,7 @@
+# Self-contained MODS test: point the scan at the committed fixture mod under
+# tests/fixtures/mods (no git-LFS dependency, unlike mods_local's tests/fixtures/mods).
+# Game CWD under tri is the data dir (packages/Remaster), so ../../tests/fixtures/mods
+# resolves to the repo's tests/fixtures/mods.
+extra_args = ["--mods-dir", "../../tests/fixtures/mods"]
+timeout = 120
+tags = ["headful"]

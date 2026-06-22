@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PAPA BEAR Browser</title>
+    <link rel="stylesheet" href="/assets/site.css" />
+  </head>
+  <body data-page="browser">
+    <nav class="top-menu"></nav>
+
+    <h1 class="title">PAPA BEAR server browser BETA</h1>
+
+    <div class="toolbar">
+      <label class="filter">
+        <span>filter</span>
+        <input id="browser-filter" type="search" placeholder="hostname" />
+      </label>
+      <label class="filter">
+        <span>verify</span>
+        <select id="browser-verification">
+          <option value="">public</option>
+          <option value="all">all known</option>
+          <option value="verified">verified</option>
+          <option value="self_reported">self reported</option>
+          <option value="unreachable">unreachable</option>
+        </select>
+      </label>
+      <span id="browser-status" class="status-line">Loading...</span>
+    </div>
+
+    <div class="browser-table-wrap">
+      <table id="browser-table">
+        <thead>
+          <tr>
+            <th class="column-id">ID</th>
+            <th class="column-server">Server</th>
+            <th class="column-mission">Mission / Mods</th>
+            <th class="column-status">Status</th>
+            <th class="column-players">Players</th>
+            <th class="column-address">Address</th>
+          </tr>
+        </thead>
+        <tbody id="browser-rows">
+          <tr>
+            <td colspan="6">Loading server list...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <script src="/assets/papa-bear.js"></script>
+  </body>
+</html>

@@ -1,0 +1,9 @@
+timeout = 30
+# Start borderless (a non-windowed mode that's harness-safe — no exclusive display
+# grab) so the test can then Alt+Enter *to* windowed and verify the resizable flag.
+# Must be --display-mode borderless (a real option): a bare --borderless is silently
+# ignored, leaving tri's injected --window to start the window windowed and fail the
+# opening triAssertFullscreen. An explicit --display-mode wins over --window
+# (AppConfig sets useWindow=false), so it stays borderless on both Windows and Linux.
+extra_args = ["--focus", "--display-mode", "borderless"]
+tags = ["headful"]

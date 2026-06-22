@@ -1,0 +1,3 @@
+; initJIP.sqs — runs on JIP client only after world sync
+jipInitRan = true
+exit

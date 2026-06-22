@@ -1,0 +1,83 @@
+# Operation Flashpoint - Code Formatting Configuration
+# Based on game industry best practices (idTech + Unreal Engine hybrid)
+# Suitable for legacy game engine modernization
+
+Language: Cpp
+BasedOnStyle: LLVM
+
+# Indentation - 4 spaces (industry standard)
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never  # Spaces for better git diffs and cross-platform compatibility
+IndentCaseLabels: true
+IndentPPDirectives: None
+NamespaceIndentation: None
+IndentAccessModifiers: false
+
+# Line Length - 120 chars (modern monitors, readable)
+ColumnLimit: 120
+
+# Braces - Allman style (game industry standard)
+# Opening brace on new line for classes, functions, control structures
+BreakBeforeBraces: Allman
+
+# Pointers and References - Modern C++ style
+PointerAlignment: Left  # Type* ptr
+ReferenceAlignment: Left  # Type& ref
+DerivePointerAlignment: false
+
+# Functions
+AllowShortFunctionsOnASingleLine: Inline  # Only inline/lambda on single line
+AlwaysBreakAfterReturnType: None
+AllowShortBlocksOnASingleLine: Empty
+
+# Control Structures
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+
+# Alignment
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: false  # Too noisy in game code
+AlignConsecutiveDeclarations: false
+AlignEscapedNewlines: Left
+AlignOperands: true
+AlignTrailingComments: true
+
+# Spacing
+SpaceAfterCStyleCast: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: false
+SpacesInAngles: false
+SpacesInCStyleCastParentheses: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# Line Breaking
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeTernaryOperators: true
+BreakConstructorInitializers: BeforeColon
+BreakInheritanceList: BeforeColon
+BreakStringLiterals: true
+
+# Include Directives - Manual control (important for PCH)
+SortIncludes: false  # Don't reorder (can break compilation with PCH)
+IncludeBlocks: Preserve
+
+# Modern C++ Features
+Cpp11BracedListStyle: true
+Standard: c++14  # Project uses C++14
+
+# Code Cleanliness
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 1
+ReflowComments: true
+
+# Penalties (fine-tune line breaking)
+PenaltyBreakBeforeFirstCallParameter: 19
+PenaltyBreakComment: 300
+PenaltyBreakString: 1000
+PenaltyExcessCharacter: 1000000
+PenaltyReturnTypeOnItsOwnLine: 60

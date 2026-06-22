@@ -1,0 +1,129 @@
+version=11;
+class Mission
+{
+	randomSeed=21000021;
+	class Intel
+	{
+	};
+	class Groups
+	{
+		items=1;
+		class Item0
+		{
+			side="WEST";
+			class Vehicles
+			{
+				items=1;
+				class Item0
+				{
+					position[]={6519.040039,149.663788,6473.679199};
+					id=0;
+					side="WEST";
+					vehicle="SoldierWB";
+					player="PLAYER COMMANDER";
+					leader=1;
+					skill=0.600000;
+				};
+			};
+		};
+	};
+	class Sensors
+	{
+		items=5;
+		class Item0
+		{
+			position[]={6519.040039,149.663788,6473.679199};
+			a=0.000000;
+			b=0.000000;
+			age="UNKNOWN";
+			text="StartScenario";
+			expCond="true";
+			expActiv="[] exec ""scenario.sqs""";
+			class Effects
+			{
+			};
+			synchronizations[]={};
+		};
+		class Item1
+		{
+			position[]={6519.040039,149.663788,6473.679199};
+			a=0.000000;
+			b=0.000000;
+			age="UNKNOWN";
+			text="BUM";
+			expCond="Konec==1 and (aP in UH)";
+			expActiv="UH allowDammage true; aP allowDammage true; UH setdammage 1; aP setdammage 1";
+			timeoutMin=2.000000;
+			timeoutMid=2.000000;
+			timeoutMax=2.000000;
+			interruptable=1.000000;
+			class Effects
+			{
+			};
+			synchronizations[]={};
+		};
+		class Item2
+		{
+			position[]={6519.040039,149.663788,6473.679199};
+			a=0.000000;
+			b=0.000000;
+			age="UNKNOWN";
+			text="Vyskakali";
+			expCond="Konec==1 and alive aP and not (aP in UH)";
+			expActiv="Ukonci=true";
+			class Effects
+			{
+			};
+			synchronizations[]={};
+		};
+		class Item3
+		{
+			position[]={6519.040039,149.663788,6473.679199};
+			a=0.000000;
+			b=0.000000;
+			age="UNKNOWN";
+			text="StartOutro";
+			expCond="Ukonci";
+			expActiv="[] exec ""outro.sqs""";
+			class Effects
+			{
+			};
+			synchronizations[]={};
+		};
+		class Item4
+		{
+			position[]={6519.040039,149.663788,6473.679199};
+			a=0.000000;
+			b=0.000000;
+			type="END1";
+			age="UNKNOWN";
+			text="Konec E1";
+			expCond="uplkonec";
+			class Effects
+			{
+			};
+			synchronizations[]={};
+		};
+	};
+};
+class Intro
+{
+	randomSeed=21000022;
+	class Intel
+	{
+	};
+};
+class OutroWin
+{
+	randomSeed=21000023;
+	class Intel
+	{
+	};
+};
+class OutroLoose
+{
+	randomSeed=21000024;
+	class Intel
+	{
+	};
+};

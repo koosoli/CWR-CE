@@ -1,0 +1,7 @@
+# Local fixture mod under --mods-dir gives the MODS list a known local row to sit
+# beside the seeded Workshop rows. The real papa-bear.cz fetch is skipped under
+# autotest; Workshop rows come from triSeedWorkshopMods, and the download itself
+# uses a fake in-process transport (triOpenModDownload) — no network.
+extra_args = ["--mods-dir", "../../tests/fixtures/mods"]
+timeout = 120
+tags = ["headful"]

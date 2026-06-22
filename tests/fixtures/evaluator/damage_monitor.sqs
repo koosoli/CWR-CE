@@ -1,0 +1,28 @@
+; Damage monitor - monitors a vehicle and reports when destroyed
+; Usage: [vehicle] exec "damage_monitor.sqs"
+
+_veh = _this select 0
+_checkCount = 0
+
+hint format ["Monitoring %1 (type: %2)", name _veh, typeOf _veh]
+
+#check
+~0.5
+_dmg = getDammage _veh
+_checkCount = _checkCount + 1
+
+? _dmg >= 1.0 : goto "destroyed"
+? _checkCount >= 5 : goto "timeout"
+
+; Apply incremental damage each cycle for testing
+_veh setDammage (_dmg + 0.3)
+hint format ["Check %1: damage = %2", _checkCount, getDammage _veh]
+goto "check"
+
+#destroyed
+hint format ["%1 destroyed after %2 checks", typeOf _veh, _checkCount]
+exit
+
+#timeout
+hint format ["Monitor timeout after %1 checks, damage: %2", _checkCount, getDammage _veh]
+exit
