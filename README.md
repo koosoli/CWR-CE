@@ -43,6 +43,13 @@ cmake --build build/win-x64-clang-rwdi
 
 On GNU/Linux, use the matching `linux-x64-clang-rwdi` preset.
 
+### Testing
+
+Copy game binaries from `dist/` into [Steam Demo folder](https://store.steampowered.com/app/4819000/Arma_Cold_War_Assault_Remastered_Demo/) and start.
+
+> [!WARNING]
+> Compiled binaries are not drop-in compatible with original game folder. See https://github.com/ofpisnotdead-com/CWR-CE/issues/8#issuecomment-4772323490 and https://github.com/ofpisnotdead-com/CWR-CE/issues/29#issuecomment-4803747960 for more info.
+
 ## Layout
 
 - [Apps](apps/README.md) - executable targets
