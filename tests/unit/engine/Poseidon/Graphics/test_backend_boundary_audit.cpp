@@ -44,5 +44,6 @@ TEST_CASE("Backend boundary: shared Poseidon sources do not include GL33 headers
         const std::string body = ReadTextFile(entry.path());
         INFO(entry.path().lexically_relative(root).generic_string());
         REQUIRE(body.find("#include <PoseidonGL33/") == std::string::npos);
+        REQUIRE(body.find("#include \"PoseidonGL33/") == std::string::npos);
     }
 }

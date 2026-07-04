@@ -69,7 +69,7 @@ class VertexBufferGL33 : public VertexBuffer
     friend class EngineGL33;
 
   private:
-        std::uint32_t _meshResourceId = 0;
+    std::uint32_t _meshResourceId = 0;
     GLuint _vao = 0;
     GLuint _vbo = 0;
     GLuint _ibo = 0;
@@ -94,8 +94,10 @@ VertexBufferGL33::~VertexBufferGL33()
 {
     UnregisterMeshResource(_meshResourceId);
     if (_vao)
+    {
         GL33Bind::OnVaoDeleted(_vao);
         glDeleteVertexArrays(1, &_vao);
+    }
     if (_vbo)
         glDeleteBuffers(1, &_vbo);
     if (_ibo)
@@ -164,6 +166,12 @@ bool VertexBufferGL33::Init(const Shape& src, VBType type)
     // GL_ELEMENT_ARRAY_BUFFER bind (the IBO binding is part of VAO state).
     // Create + bind the VAO first, then bind buffers inside it.
     glGenVertexArrays(1, &_vao);
+    if (_vao == 0)
+    {
+        LOG_ERROR(Graphics, "GL33: VAO allocation failed");
+        return false;
+    }
+
     _meshResourceId = AllocateMeshResourceId();
     RegisterMeshResource(_meshResourceId, _vao);
     GL33Bind::Vao(_vao);
