@@ -4,6 +4,8 @@
 #include <PoseidonVK/FrameConstantsVK.hpp>
 #include <Poseidon/Graphics/Rendering/Frame/BuildFrame.hpp>
 
+#include <cstddef>
+
 namespace frame = Poseidon::render::frame;
 
 namespace
@@ -35,6 +37,21 @@ frame::Frame makeFrame()
 }
 
 } // namespace
+
+TEST_CASE("Vulkan frame constants match std140 descriptor layout", "[vulkan][frame-constants]")
+{
+    using Poseidon::vk::FrameConstantsVK;
+
+    STATIC_REQUIRE(sizeof(GfxMatrix) == 64);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, view) == 0);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, projection) == 64);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, viewport) == 128);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, clipPlanes) == 144);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, worldRect) == 160);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, fogParams) == 176);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, fogColor) == 192);
+    STATIC_REQUIRE(sizeof(FrameConstantsVK) == 208);
+}
 
 TEST_CASE("Vulkan frame constants preserve frame camera matrices", "[vulkan][frame-constants]")
 {

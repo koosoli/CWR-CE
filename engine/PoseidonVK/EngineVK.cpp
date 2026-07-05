@@ -92,8 +92,14 @@ const char* VkResultName(VkResult result)
     {
         case VK_SUCCESS:
             return "VK_SUCCESS";
+        case VK_ERROR_OUT_OF_HOST_MEMORY:
+            return "VK_ERROR_OUT_OF_HOST_MEMORY";
+        case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+            return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
         case VK_ERROR_INITIALIZATION_FAILED:
             return "VK_ERROR_INITIALIZATION_FAILED";
+        case VK_ERROR_MEMORY_MAP_FAILED:
+            return "VK_ERROR_MEMORY_MAP_FAILED";
         case VK_ERROR_EXTENSION_NOT_PRESENT:
             return "VK_ERROR_EXTENSION_NOT_PRESENT";
         case VK_ERROR_LAYER_NOT_PRESENT:
@@ -104,6 +110,8 @@ const char* VkResultName(VkResult result)
             return "VK_ERROR_DEVICE_LOST";
         case VK_ERROR_OUT_OF_DATE_KHR:
             return "VK_ERROR_OUT_OF_DATE_KHR";
+        case VK_ERROR_OUT_OF_POOL_MEMORY:
+            return "VK_ERROR_OUT_OF_POOL_MEMORY";
         case VK_SUBOPTIMAL_KHR:
             return "VK_SUBOPTIMAL_KHR";
         default:
@@ -214,6 +222,22 @@ bool RecreateSignaledFence(VkDevice device, VkFence& fence)
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     return vkCreateFence(device, &fenceInfo, nullptr, &fence) == VK_SUCCESS;
+}
+
+uint32_t FindMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties)
+{
+    VkPhysicalDeviceMemoryProperties memoryProperties{};
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+
+    for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i)
+    {
+        const bool typeMatches = (typeFilter & (1u << i)) != 0;
+        const bool flagsMatch = (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties;
+        if (typeMatches && flagsMatch)
+            return i;
+    }
+
+    return UINT32_MAX;
 }
 
 void EnsureGlslangInitialized()
@@ -350,7 +374,8 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
     }
 
     if (!CreateInstance() || !CreateDebugMessenger() || !CreateSurface() || !PickPhysicalDevice() || !CreateDevice() ||
-        !CreatePipelineLayout() || !CreateCommandPool() || !CreateSwapchain() || !CreateBootstrapPipeline() ||
+        !CreateFrameConstantsBuffer() || !CreateFrameDescriptorLayout() || !CreatePipelineLayout() ||
+        !CreateFrameDescriptorSet() || !CreateCommandPool() || !CreateSwapchain() || !CreateBootstrapPipeline() ||
         !CreateSyncObjects())
     {
         Shutdown();
@@ -367,8 +392,8 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
 
     LOG_INFO(Graphics, "Vulkan: bootstrap initialized {}x{} mode={} graphics_queue={} present_queue={}", _width,
              _height, static_cast<int>(_windowMode), _graphicsQueueFamily, _presentQueueFamily);
-    LOG_WARN(Graphics, "Vulkan: scene rendering is not implemented yet; bootstrap currently presents a clear-color "
-                       "frame only");
+    LOG_WARN(Graphics, "Vulkan: scene rendering is not implemented yet; bootstrap currently presents a validation "
+                       "triangle only");
     return true;
 }
 
@@ -388,7 +413,14 @@ void EngineVK::Clear(bool, bool clear, PackedColor color)
 void EngineVK::NextFrame()
 {
     Engine::NextFrame();
-    PresentClearFrame();
+    PresentBootstrapFrame();
+}
+
+void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
+{
+    _lastFrameConstants = vk::BuildFrameConstants(frame);
+    _hasFrameConstants = true;
+    UploadFrameConstants();
 }
 
 bool EngineVK::CreateInstance()
@@ -583,6 +615,8 @@ bool EngineVK::CreateDevice()
 
 bool EngineVK::CreatePipelineLayout()
 {
+    VkDescriptorSetLayout setLayouts[] = {_frameDescriptorSetLayout};
+
     VkPushConstantRange pushConstants{};
     pushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstants.offset = 0;
@@ -590,6 +624,8 @@ bool EngineVK::CreatePipelineLayout()
 
     VkPipelineLayoutCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    createInfo.setLayoutCount = _frameDescriptorSetLayout ? 1u : 0u;
+    createInfo.pSetLayouts = _frameDescriptorSetLayout ? setLayouts : nullptr;
     createInfo.pushConstantRangeCount = 1;
     createInfo.pPushConstantRanges = &pushConstants;
 
@@ -601,6 +637,155 @@ bool EngineVK::CreatePipelineLayout()
     }
     SetObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT, VulkanObjectHandle(_pipelineLayout),
                   "PoseidonVK Bootstrap Pipeline Layout");
+    return true;
+}
+
+bool EngineVK::CreateFrameConstantsBuffer()
+{
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = sizeof(vk::FrameConstantsVK);
+    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkResult result = vkCreateBuffer(_device, &bufferInfo, nullptr, &_frameConstantsBuffer);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: vkCreateBuffer(frame constants) failed: {}", VkResultName(result));
+        return false;
+    }
+
+    VkMemoryRequirements requirements{};
+    vkGetBufferMemoryRequirements(_device, _frameConstantsBuffer, &requirements);
+
+    const uint32_t memoryType =
+        FindMemoryType(_physicalDevice, requirements.memoryTypeBits,
+                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (memoryType == UINT32_MAX)
+    {
+        LOG_ERROR(Graphics, "Vulkan: no host-visible memory type for frame constants buffer");
+        DestroyFrameConstantsBuffer();
+        return false;
+    }
+
+    VkMemoryAllocateInfo allocateInfo{};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocateInfo.allocationSize = requirements.size;
+    allocateInfo.memoryTypeIndex = memoryType;
+
+    result = vkAllocateMemory(_device, &allocateInfo, nullptr, &_frameConstantsMemory);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: vkAllocateMemory(frame constants) failed: {}", VkResultName(result));
+        DestroyFrameConstantsBuffer();
+        return false;
+    }
+
+    result = vkBindBufferMemory(_device, _frameConstantsBuffer, _frameConstantsMemory, 0);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: vkBindBufferMemory(frame constants) failed: {}", VkResultName(result));
+        DestroyFrameConstantsBuffer();
+        return false;
+    }
+
+    result = vkMapMemory(_device, _frameConstantsMemory, 0, sizeof(vk::FrameConstantsVK), 0, &_frameConstantsMapped);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: vkMapMemory(frame constants) failed: {}", VkResultName(result));
+        DestroyFrameConstantsBuffer();
+        return false;
+    }
+
+    UploadFrameConstants();
+    SetObjectName(VK_OBJECT_TYPE_BUFFER, VulkanObjectHandle(_frameConstantsBuffer),
+                  "PoseidonVK Frame Constants Buffer");
+    SetObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, VulkanObjectHandle(_frameConstantsMemory),
+                  "PoseidonVK Frame Constants Memory");
+    return true;
+}
+
+bool EngineVK::CreateFrameDescriptorLayout()
+{
+    VkDescriptorSetLayoutBinding frameConstantsBinding{};
+    frameConstantsBinding.binding = 0;
+    frameConstantsBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    frameConstantsBinding.descriptorCount = 1;
+    frameConstantsBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    createInfo.bindingCount = 1;
+    createInfo.pBindings = &frameConstantsBinding;
+
+    const VkResult result = vkCreateDescriptorSetLayout(_device, &createInfo, nullptr, &_frameDescriptorSetLayout);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: vkCreateDescriptorSetLayout(frame constants) failed: {}", VkResultName(result));
+        return false;
+    }
+
+    SetObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, VulkanObjectHandle(_frameDescriptorSetLayout),
+                  "PoseidonVK Frame Descriptor Set Layout");
+    return true;
+}
+
+bool EngineVK::CreateFrameDescriptorSet()
+{
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+
+    VkResult result = vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_descriptorPool);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: vkCreateDescriptorPool(frame constants) failed: {}", VkResultName(result));
+        return false;
+    }
+
+    VkDescriptorSetAllocateInfo allocateInfo{};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocateInfo.descriptorPool = _descriptorPool;
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &_frameDescriptorSetLayout;
+
+    result = vkAllocateDescriptorSets(_device, &allocateInfo, &_frameDescriptorSet);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: vkAllocateDescriptorSets(frame constants) failed: {}", VkResultName(result));
+        if (_descriptorPool)
+        {
+            vkDestroyDescriptorPool(_device, _descriptorPool, nullptr);
+            _descriptorPool = VK_NULL_HANDLE;
+        }
+        return false;
+    }
+
+    VkDescriptorBufferInfo bufferInfo{};
+    bufferInfo.buffer = _frameConstantsBuffer;
+    bufferInfo.offset = 0;
+    bufferInfo.range = sizeof(vk::FrameConstantsVK);
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = _frameDescriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    write.pBufferInfo = &bufferInfo;
+
+    vkUpdateDescriptorSets(_device, 1, &write, 0, nullptr);
+
+    SetObjectName(VK_OBJECT_TYPE_DESCRIPTOR_POOL, VulkanObjectHandle(_descriptorPool),
+                  "PoseidonVK Descriptor Pool");
+    SetObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET, VulkanObjectHandle(_frameDescriptorSet),
+                  "PoseidonVK Frame Descriptor Set");
     return true;
 }
 
@@ -1050,7 +1235,28 @@ void EngineVK::EndDebugLabel(VkCommandBuffer commandBuffer) const
         fn(commandBuffer);
 }
 
-bool EngineVK::RecordClearCommand(uint32_t imageIndex)
+void EngineVK::UploadFrameConstants()
+{
+    if (_frameConstantsMapped)
+        std::memcpy(_frameConstantsMapped, &_lastFrameConstants, sizeof(_lastFrameConstants));
+}
+
+void EngineVK::DestroyFrameDescriptorResources()
+{
+    _frameDescriptorSet = VK_NULL_HANDLE;
+    if (_device && _descriptorPool)
+    {
+        vkDestroyDescriptorPool(_device, _descriptorPool, nullptr);
+        _descriptorPool = VK_NULL_HANDLE;
+    }
+    if (_device && _frameDescriptorSetLayout)
+    {
+        vkDestroyDescriptorSetLayout(_device, _frameDescriptorSetLayout, nullptr);
+        _frameDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+}
+
+bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
 {
     if (imageIndex >= _commandBuffers.size() || imageIndex >= _framebuffers.size())
         return false;
@@ -1069,7 +1275,7 @@ bool EngineVK::RecordClearCommand(uint32_t imageIndex)
         return false;
     }
 
-    BeginDebugLabel(commandBuffer, "PoseidonVK Render Pass Clear", 0.04f, 0.35f, 0.75f);
+    BeginDebugLabel(commandBuffer, "PoseidonVK Bootstrap Render Pass", 0.04f, 0.35f, 0.75f);
 
     VkClearValue clearValue{};
     clearValue.color = _clearColor;
@@ -1086,17 +1292,18 @@ bool EngineVK::RecordClearCommand(uint32_t imageIndex)
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     if (_bootstrapPipeline)
     {
-        vk::BootstrapPushConstantsVK constants{};
-        constants.viewport[0] = 0.0f;
-        constants.viewport[1] = 0.0f;
-        constants.viewport[2] = static_cast<float>(_swapchainExtent.width);
-        constants.viewport[3] = static_cast<float>(_swapchainExtent.height);
-        constants.clearColor[0] = _clearColor.float32[0];
-        constants.clearColor[1] = _clearColor.float32[1];
-        constants.clearColor[2] = _clearColor.float32[2];
-        constants.clearColor[3] = _clearColor.float32[3];
+        const vk::BootstrapPushConstantsVK constants =
+            _hasFrameConstants
+                ? vk::BuildBootstrapPushConstants(_lastFrameConstants, _clearColor.float32)
+                : vk::BuildBootstrapPushConstants(static_cast<int>(_swapchainExtent.width),
+                                                  static_cast<int>(_swapchainExtent.height), _clearColor.float32);
 
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _bootstrapPipeline);
+        if (_frameDescriptorSet)
+        {
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipelineLayout, 0, 1,
+                                    &_frameDescriptorSet, 0, nullptr);
+        }
         vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, vk::kBootstrapPushConstantsSize, &constants);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
@@ -1165,6 +1372,25 @@ void EngineVK::DestroySwapchain()
     }
 }
 
+void EngineVK::DestroyFrameConstantsBuffer()
+{
+    if (_device && _frameConstantsMapped)
+    {
+        vkUnmapMemory(_device, _frameConstantsMemory);
+        _frameConstantsMapped = nullptr;
+    }
+    if (_device && _frameConstantsBuffer)
+    {
+        vkDestroyBuffer(_device, _frameConstantsBuffer, nullptr);
+        _frameConstantsBuffer = VK_NULL_HANDLE;
+    }
+    if (_device && _frameConstantsMemory)
+    {
+        vkFreeMemory(_device, _frameConstantsMemory, nullptr);
+        _frameConstantsMemory = VK_NULL_HANDLE;
+    }
+}
+
 bool EngineVK::RecreateSwapchain()
 {
     if (!_device)
@@ -1177,7 +1403,7 @@ bool EngineVK::RecreateSwapchain()
     return recreated;
 }
 
-void EngineVK::PresentClearFrame()
+void EngineVK::PresentBootstrapFrame()
 {
     if (!_device)
         return;
@@ -1208,7 +1434,7 @@ void EngineVK::PresentClearFrame()
         return;
     }
 
-    if (!RecordClearCommand(imageIndex))
+    if (!RecordBootstrapCommand(imageIndex))
         return;
 
     vkResetFences(_device, 1, &_inFlight);
@@ -1247,7 +1473,7 @@ void EngineVK::PresentClearFrame()
     else if (!_loggedFirstPresent)
     {
         _loggedFirstPresent = true;
-        LOG_INFO(Graphics, "Vulkan: clear-present completed");
+        LOG_INFO(Graphics, "Vulkan: bootstrap-present completed");
     }
 }
 
@@ -1277,6 +1503,8 @@ void EngineVK::Shutdown()
             vkDestroyPipelineLayout(_device, _pipelineLayout, nullptr);
             _pipelineLayout = VK_NULL_HANDLE;
         }
+        DestroyFrameDescriptorResources();
+        DestroyFrameConstantsBuffer();
         vkDestroyDevice(_device, nullptr);
         _device = VK_NULL_HANDLE;
     }

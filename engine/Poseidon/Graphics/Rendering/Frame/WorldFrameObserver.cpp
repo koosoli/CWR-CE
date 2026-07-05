@@ -29,6 +29,9 @@ const std::vector<ObservedPass>& LastObservedFrameShape()
 
 void ObserveRenderedFrame(Engine& engine, Scene& scene)
 {
+    const bool submitFramePlan = engine.ConsumesRenderFramePlan();
+    bool runDiagnostics = true;
+
     // Diagnostics, not rendering: extraction walks every draw bucket
     // (O(draw calls) copies per frame) and the validators scan the result.
     // Sample every 16th frame in normal play — a real invariant violation
@@ -45,8 +48,16 @@ void ObserveRenderedFrame(Engine& engine, Scene& scene)
         if (!s_everyFrame)
         {
             if (--s_sampleCountdown > 0)
+            {
+                runDiagnostics = false;
+            }
+            else
+            {
+                s_sampleCountdown = 16;
+            }
+
+            if (!runDiagnostics && !submitFramePlan)
                 return;
-            s_sampleCountdown = 16;
         }
     }
     // Frame-static state: tracks the GL error count across frames
@@ -74,6 +85,12 @@ void ObserveRenderedFrame(Engine& engine, Scene& scene)
     s_lastGlErrorCount = si.currentDebugErrorCount;
 
     const Frame f = BuildFrame(si);
+
+    if (submitFramePlan)
+        engine.SubmitFramePlan(f);
+
+    if (!runDiagnostics)
+        return;
 
     // Snapshot the pass shape for the tri harness.
     s_lastShape.clear();

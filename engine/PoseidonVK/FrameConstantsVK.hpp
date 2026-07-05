@@ -2,6 +2,7 @@
 
 #include <Poseidon/Graphics/Rendering/Frame/Frame.hpp>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace Poseidon::vk
@@ -17,6 +18,16 @@ struct FrameConstantsVK
     float fogParams[4] = {};  // start, end, inverse range, enabled
     float fogColor[4] = {};   // rgba, normalized
 };
+
+static_assert(sizeof(GfxMatrix) == 64);
+static_assert(offsetof(FrameConstantsVK, view) == 0);
+static_assert(offsetof(FrameConstantsVK, projection) == 64);
+static_assert(offsetof(FrameConstantsVK, viewport) == 128);
+static_assert(offsetof(FrameConstantsVK, clipPlanes) == 144);
+static_assert(offsetof(FrameConstantsVK, worldRect) == 160);
+static_assert(offsetof(FrameConstantsVK, fogParams) == 176);
+static_assert(offsetof(FrameConstantsVK, fogColor) == 192);
+static_assert(sizeof(FrameConstantsVK) == 208);
 
 inline float ChannelToFloat(std::uint32_t value) noexcept
 {

@@ -132,5 +132,5 @@ The recommended Phase 2 entry slice is deliberately small:
 2. Add Vulkan diagnostics that make RenderDoc/validation captures readable.
 3. Introduce backend-neutral frame/camera constants without leaking Vulkan
    handles into shared `engine/Poseidon` contracts.
-4. Feed the tested frame constants into the Vulkan bootstrap path.
+4. Bind the uploaded frame constants from Vulkan shaders.
 5. Only then start uploading real terrain/model/HUD resources.

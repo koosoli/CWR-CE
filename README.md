@@ -91,6 +91,10 @@ smoke-testable.
   path.
 - [x] Lock the Vulkan bootstrap push-constant byte layout to the shader
   contract with tests.
+- [x] Route the backend-neutral frame plan into Vulkan frame constants and use
+  the viewport path for the bootstrap primitive.
+- [x] Upload Vulkan frame constants into a backend-owned uniform buffer and
+  descriptor set.
 - [ ] Feed camera, projection, fog, lighting, and per-draw constants into Vulkan.
 - [ ] Upload static and dynamic mesh buffers through backend-owned resources.
 - [ ] Implement texture creation, sampler state, mip use, and fallback behavior.

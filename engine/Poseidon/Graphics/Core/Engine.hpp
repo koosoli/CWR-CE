@@ -37,6 +37,7 @@ namespace render
 namespace frame
 {
 struct Draw;
+struct Frame;
 }
 } // namespace render
 
@@ -527,6 +528,12 @@ class Engine : public IGraphicsEngine
     // reference and only dereferenced inside the override, so the
     // forward-decl above is sufficient at this seam.
     virtual void EmitDraw(const render::frame::Draw& /*d*/) {}
+
+    // Optional backend handoff for the immutable frame plan produced by
+    // BuildFrame(SceneInputs). Backends that do not consume it keep the
+    // observer on the cheaper diagnostic sampling path.
+    virtual bool ConsumesRenderFramePlan() const { return false; }
+    virtual void SubmitFramePlan(const render::frame::Frame& /*frame*/) {}
 
     // Live GL viewport rect (x, y, width, height).  The frame validator reads
     // this to confirm the engine's recorded viewport at extract time matches

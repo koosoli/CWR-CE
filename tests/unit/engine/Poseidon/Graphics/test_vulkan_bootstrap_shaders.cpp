@@ -114,3 +114,42 @@ TEST_CASE("Vulkan bootstrap push constants match shader contract", "[vulkan][sha
     CHECK(fragmentSource.find("vec4 viewport;") != std::string::npos);
     CHECK(fragmentSource.find("vec4 clearColor;") != std::string::npos);
 }
+
+TEST_CASE("Vulkan bootstrap push constants copy viewport and clear color", "[vulkan][shaders]")
+{
+    const float clearColor[4] = {0.04f, 0.09f, 0.16f, 1.0f};
+
+    const Poseidon::vk::BootstrapPushConstantsVK constants =
+        Poseidon::vk::BuildBootstrapPushConstants(3441, 1440, clearColor);
+
+    CHECK(constants.viewport[0] == 0.0f);
+    CHECK(constants.viewport[1] == 0.0f);
+    CHECK(constants.viewport[2] == 3441.0f);
+    CHECK(constants.viewport[3] == 1440.0f);
+    CHECK(constants.clearColor[0] == 0.04f);
+    CHECK(constants.clearColor[1] == 0.09f);
+    CHECK(constants.clearColor[2] == 0.16f);
+    CHECK(constants.clearColor[3] == 1.0f);
+}
+
+TEST_CASE("Vulkan bootstrap push constants can use frame constants viewport", "[vulkan][shaders]")
+{
+    Poseidon::vk::FrameConstantsVK frameConstants;
+    frameConstants.viewport[0] = 8.0f;
+    frameConstants.viewport[1] = 16.0f;
+    frameConstants.viewport[2] = 1280.0f;
+    frameConstants.viewport[3] = 720.0f;
+    const float clearColor[4] = {0.2f, 0.3f, 0.4f, 1.0f};
+
+    const Poseidon::vk::BootstrapPushConstantsVK constants =
+        Poseidon::vk::BuildBootstrapPushConstants(frameConstants, clearColor);
+
+    CHECK(constants.viewport[0] == 8.0f);
+    CHECK(constants.viewport[1] == 16.0f);
+    CHECK(constants.viewport[2] == 1280.0f);
+    CHECK(constants.viewport[3] == 720.0f);
+    CHECK(constants.clearColor[0] == 0.2f);
+    CHECK(constants.clearColor[1] == 0.3f);
+    CHECK(constants.clearColor[2] == 0.4f);
+    CHECK(constants.clearColor[3] == 1.0f);
+}

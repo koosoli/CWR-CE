@@ -1,5 +1,6 @@
 #pragma once
 
+#include <PoseidonVK/FrameConstantsVK.hpp>
 #include <Poseidon/Graphics/Dummy/EngineDummy.hpp>
 #include <Poseidon/Graphics/Shared/WindowMode.hpp>
 #include <vulkan/vulkan.h>
@@ -25,6 +26,8 @@ class EngineVK : public EngineDummy
 
     void Clear(bool clearZ, bool clear, PackedColor color) override;
     void NextFrame() override;
+    bool ConsumesRenderFramePlan() const override { return true; }
+    void SubmitFramePlan(const render::frame::Frame& frame) override;
     void HandleEvents() override;
     bool IsOpen() const override { return _open; }
     void SetMouseGrab(bool grab) override;
@@ -47,18 +50,24 @@ class EngineVK : public EngineDummy
     bool CreateSurface();
     bool PickPhysicalDevice();
     bool CreateDevice();
+    bool CreateFrameConstantsBuffer();
+    bool CreateFrameDescriptorLayout();
+    bool CreateFrameDescriptorSet();
     bool CreatePipelineLayout();
     bool CreateSwapchain();
     bool CreateBootstrapPipeline();
     bool CreateCommandPool();
     bool CreateSyncObjects();
-    bool RecordClearCommand(uint32_t imageIndex);
+    bool RecordBootstrapCommand(uint32_t imageIndex);
     void SetObjectName(VkObjectType objectType, uint64_t objectHandle, const char* name) const;
     void BeginDebugLabel(VkCommandBuffer commandBuffer, const char* name, float r, float g, float b) const;
     void EndDebugLabel(VkCommandBuffer commandBuffer) const;
+    void UploadFrameConstants();
+    void DestroyFrameDescriptorResources();
+    void DestroyFrameConstantsBuffer();
     void DestroySwapchain();
     bool RecreateSwapchain();
-    void PresentClearFrame();
+    void PresentBootstrapFrame();
     void Shutdown();
     void OnResized();
 
@@ -70,6 +79,12 @@ class EngineVK : public EngineDummy
     VkDevice _device = VK_NULL_HANDLE;
     VkQueue _graphicsQueue = VK_NULL_HANDLE;
     VkQueue _presentQueue = VK_NULL_HANDLE;
+    VkBuffer _frameConstantsBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory _frameConstantsMemory = VK_NULL_HANDLE;
+    void* _frameConstantsMapped = nullptr;
+    VkDescriptorSetLayout _frameDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool _descriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet _frameDescriptorSet = VK_NULL_HANDLE;
     VkPipelineLayout _pipelineLayout = VK_NULL_HANDLE;
     VkPipeline _bootstrapPipeline = VK_NULL_HANDLE;
     VkSwapchainKHR _swapchain = VK_NULL_HANDLE;
@@ -92,8 +107,10 @@ class EngineVK : public EngineDummy
     bool _mouseGrab = true;
     bool _swapchainDirty = false;
     bool _loggedFirstPresent = false;
+    bool _hasFrameConstants = false;
     bool _validationEnabled = false;
     bool _debugUtilsEnabled = false;
+    vk::FrameConstantsVK _lastFrameConstants = {};
     VkClearColorValue _clearColor{{0.04f, 0.09f, 0.16f, 1.0f}};
     int _width = 1;
     int _height = 1;
