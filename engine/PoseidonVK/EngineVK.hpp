@@ -43,6 +43,7 @@ class EngineVK : public EngineDummy
   private:
     bool Initialize(int width, int height, bool windowed, int bitsPerPixel, const std::string& displayMode);
     bool CreateInstance();
+    bool CreateDebugMessenger();
     bool CreateSurface();
     bool PickPhysicalDevice();
     bool CreateDevice();
@@ -58,6 +59,7 @@ class EngineVK : public EngineDummy
 
     SDL_Window* _window = nullptr;
     VkInstance _instance = VK_NULL_HANDLE;
+    VkDebugUtilsMessengerEXT _debugMessenger = VK_NULL_HANDLE;
     VkSurfaceKHR _surface = VK_NULL_HANDLE;
     VkPhysicalDevice _physicalDevice = VK_NULL_HANDLE;
     VkDevice _device = VK_NULL_HANDLE;
@@ -70,8 +72,8 @@ class EngineVK : public EngineDummy
     std::vector<VkImage> _swapchainImages;
     std::vector<VkImageLayout> _swapchainImageLayouts;
     std::vector<VkCommandBuffer> _commandBuffers;
+    std::vector<VkSemaphore> _renderFinished;
     VkSemaphore _imageAvailable = VK_NULL_HANDLE;
-    VkSemaphore _renderFinished = VK_NULL_HANDLE;
     VkFence _inFlight = VK_NULL_HANDLE;
     uint32_t _graphicsQueueFamily = UINT32_MAX;
     uint32_t _presentQueueFamily = UINT32_MAX;
@@ -81,6 +83,7 @@ class EngineVK : public EngineDummy
     bool _mouseGrab = true;
     bool _swapchainDirty = false;
     bool _loggedFirstPresent = false;
+    bool _validationEnabled = false;
     VkClearColorValue _clearColor{{0.04f, 0.09f, 0.16f, 1.0f}};
     int _width = 1;
     int _height = 1;

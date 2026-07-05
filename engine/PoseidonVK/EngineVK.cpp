@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 #include <set>
+#include <string>
 #include <vector>
 
 extern void SDLInput_BufferKeyEvent(SDL_Scancode sc, bool down, DWORD timestamp);
@@ -25,6 +26,38 @@ namespace Poseidon
 
 namespace
 {
+constexpr const char* kValidationLayer = "VK_LAYER_KHRONOS_validation";
+
+bool HasInstanceExtension(const char* requiredExtension)
+{
+    uint32_t count = 0;
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr) != VK_SUCCESS)
+        return false;
+
+    std::vector<VkExtensionProperties> extensions(count);
+    if (count > 0 && vkEnumerateInstanceExtensionProperties(nullptr, &count, extensions.data()) != VK_SUCCESS)
+        return false;
+
+    return std::any_of(extensions.begin(), extensions.end(),
+                       [requiredExtension](const VkExtensionProperties& extension)
+                       { return std::strcmp(extension.extensionName, requiredExtension) == 0; });
+}
+
+bool HasInstanceLayer(const char* requiredLayer)
+{
+    uint32_t count = 0;
+    if (vkEnumerateInstanceLayerProperties(&count, nullptr) != VK_SUCCESS)
+        return false;
+
+    std::vector<VkLayerProperties> layers(count);
+    if (count > 0 && vkEnumerateInstanceLayerProperties(&count, layers.data()) != VK_SUCCESS)
+        return false;
+
+    return std::any_of(layers.begin(), layers.end(),
+                       [requiredLayer](const VkLayerProperties& layer)
+                       { return std::strcmp(layer.layerName, requiredLayer) == 0; });
+}
+
 bool HasDeviceExtension(VkPhysicalDevice device, const char* requiredExtension)
 {
     uint32_t count = 0;
@@ -66,6 +99,63 @@ const char* VkResultName(VkResult result)
     }
 }
 
+const char* DebugSeverityName(VkDebugUtilsMessageSeverityFlagBitsEXT severity)
+{
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+        return "error";
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+        return "warning";
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT)
+        return "info";
+    return "verbose";
+}
+
+VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+                                                   VkDebugUtilsMessageTypeFlagsEXT,
+                                                   const VkDebugUtilsMessengerCallbackDataEXT* callbackData,
+                                                   void*)
+{
+    const char* message = callbackData && callbackData->pMessage ? callbackData->pMessage : "<no message>";
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
+        LOG_ERROR(Graphics, "Vulkan validation [{}]: {}", DebugSeverityName(severity), message);
+    else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
+        LOG_WARN(Graphics, "Vulkan validation [{}]: {}", DebugSeverityName(severity), message);
+    else
+        LOG_DEBUG(Graphics, "Vulkan validation [{}]: {}", DebugSeverityName(severity), message);
+    return VK_FALSE;
+}
+
+VkDebugUtilsMessengerCreateInfoEXT MakeDebugMessengerCreateInfo()
+{
+    VkDebugUtilsMessengerCreateInfoEXT createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                                 VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                             VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    createInfo.pfnUserCallback = VulkanDebugCallback;
+    return createInfo;
+}
+
+VkResult CreateDebugUtilsMessenger(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* createInfo,
+                                   VkDebugUtilsMessengerEXT* messenger)
+{
+    auto fn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+    if (!fn)
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    return fn(instance, createInfo, nullptr, messenger);
+}
+
+void DestroyDebugUtilsMessenger(VkInstance instance, VkDebugUtilsMessengerEXT messenger)
+{
+    auto fn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+        vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+    if (fn)
+        fn(instance, messenger, nullptr);
+}
+
 VkSurfaceFormatKHR ChooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats)
 {
     for (const VkSurfaceFormatKHR& format : formats)
@@ -89,6 +179,20 @@ VkExtent2D ClampExtent(int width, int height, const VkSurfaceCapabilitiesKHR& ca
     extent.width = std::clamp(extent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
     extent.height = std::clamp(extent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
     return extent;
+}
+
+bool RecreateSignaledFence(VkDevice device, VkFence& fence)
+{
+    if (fence)
+    {
+        vkDestroyFence(device, fence, nullptr);
+        fence = VK_NULL_HANDLE;
+    }
+
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    return vkCreateFence(device, &fenceInfo, nullptr, &fence) == VK_SUCCESS;
 }
 } // namespace
 
@@ -179,8 +283,8 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
         SDL_SetWindowPosition(_window, placement.posX, placement.posY);
     }
 
-    if (!CreateInstance() || !CreateSurface() || !PickPhysicalDevice() || !CreateDevice() || !CreateCommandPool() ||
-        !CreateSwapchain() || !CreateSyncObjects())
+    if (!CreateInstance() || !CreateDebugMessenger() || !CreateSurface() || !PickPhysicalDevice() || !CreateDevice() ||
+        !CreateCommandPool() || !CreateSwapchain() || !CreateSyncObjects())
     {
         Shutdown();
         return false;
@@ -221,12 +325,25 @@ void EngineVK::NextFrame()
 bool EngineVK::CreateInstance()
 {
     Uint32 extensionCount = 0;
-    const char* const* extensions = SDL_Vulkan_GetInstanceExtensions(&extensionCount);
-    if (!extensions || extensionCount == 0)
+    const char* const* sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&extensionCount);
+    if (!sdlExtensions || extensionCount == 0)
     {
         LOG_ERROR(Graphics, "Vulkan: SDL_Vulkan_GetInstanceExtensions failed: {}", SDL_GetError());
         return false;
     }
+
+    std::vector<const char*> extensions(sdlExtensions, sdlExtensions + extensionCount);
+
+#ifdef _DEBUG
+    const bool hasValidationLayer = HasInstanceLayer(kValidationLayer);
+    const bool hasDebugUtils = HasInstanceExtension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    _validationEnabled = hasValidationLayer && hasDebugUtils;
+    if (_validationEnabled)
+        extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    else
+        LOG_WARN(Graphics, "Vulkan: validation disabled ({}={}, {}={})", kValidationLayer,
+                 hasValidationLayer ? "yes" : "no", VK_EXT_DEBUG_UTILS_EXTENSION_NAME, hasDebugUtils ? "yes" : "no");
+#endif
 
     VkApplicationInfo appInfo{};
     appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -239,8 +356,18 @@ bool EngineVK::CreateInstance()
     VkInstanceCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     createInfo.pApplicationInfo = &appInfo;
-    createInfo.enabledExtensionCount = extensionCount;
-    createInfo.ppEnabledExtensionNames = extensions;
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+    createInfo.ppEnabledExtensionNames = extensions.data();
+
+    const char* validationLayers[] = {kValidationLayer};
+    VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{};
+    if (_validationEnabled)
+    {
+        debugCreateInfo = MakeDebugMessengerCreateInfo();
+        createInfo.enabledLayerCount = 1;
+        createInfo.ppEnabledLayerNames = validationLayers;
+        createInfo.pNext = &debugCreateInfo;
+    }
 
     const VkResult result = vkCreateInstance(&createInfo, nullptr, &_instance);
     if (result != VK_SUCCESS)
@@ -248,6 +375,25 @@ bool EngineVK::CreateInstance()
         LOG_ERROR(Graphics, "Vulkan: vkCreateInstance failed: {}", VkResultName(result));
         return false;
     }
+    if (_validationEnabled)
+        LOG_INFO(Graphics, "Vulkan: validation layer enabled ({})", kValidationLayer);
+    return true;
+}
+
+bool EngineVK::CreateDebugMessenger()
+{
+    if (!_validationEnabled)
+        return true;
+
+    const VkDebugUtilsMessengerCreateInfoEXT createInfo = MakeDebugMessengerCreateInfo();
+    const VkResult result = CreateDebugUtilsMessenger(_instance, &createInfo, &_debugMessenger);
+    if (result != VK_SUCCESS)
+    {
+        LOG_WARN(Graphics, "Vulkan: debug messenger unavailable: {}", VkResultName(result));
+        _debugMessenger = VK_NULL_HANDLE;
+        return true;
+    }
+    LOG_INFO(Graphics, "Vulkan: debug messenger installed");
     return true;
 }
 
@@ -398,6 +544,11 @@ bool EngineVK::CreateSwapchain()
 
     const VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat(formats);
     const VkExtent2D extent = ClampExtent(_width, _height, capabilities);
+    if (extent.width == 0 || extent.height == 0)
+    {
+        LOG_WARN(Graphics, "Vulkan: swapchain deferred for zero-sized surface {}x{}", extent.width, extent.height);
+        return false;
+    }
 
     uint32_t imageCount = capabilities.minImageCount + 1;
     if (capabilities.maxImageCount > 0 && imageCount > capabilities.maxImageCount)
@@ -472,12 +623,40 @@ bool EngineVK::CreateSyncObjects()
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    if (vkCreateSemaphore(_device, &semaphoreInfo, nullptr, &_imageAvailable) != VK_SUCCESS ||
-        vkCreateSemaphore(_device, &semaphoreInfo, nullptr, &_renderFinished) != VK_SUCCESS ||
-        vkCreateFence(_device, &fenceInfo, nullptr, &_inFlight) != VK_SUCCESS)
+    if (!_imageAvailable && vkCreateSemaphore(_device, &semaphoreInfo, nullptr, &_imageAvailable) != VK_SUCCESS)
     {
-        LOG_ERROR(Graphics, "Vulkan: failed to create frame sync objects");
+        LOG_ERROR(Graphics, "Vulkan: failed to create image-available semaphore");
         return false;
+    }
+
+    if (!_inFlight && vkCreateFence(_device, &fenceInfo, nullptr, &_inFlight) != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: failed to create frame fence");
+        return false;
+    }
+
+    if (_renderFinished.size() == _swapchainImages.size() &&
+        std::all_of(_renderFinished.begin(), _renderFinished.end(), [](VkSemaphore semaphore)
+                    { return semaphore != VK_NULL_HANDLE; }))
+    {
+        return true;
+    }
+
+    for (VkSemaphore semaphore : _renderFinished)
+    {
+        if (semaphore)
+            vkDestroySemaphore(_device, semaphore, nullptr);
+    }
+    _renderFinished.clear();
+
+    _renderFinished.resize(_swapchainImages.size(), VK_NULL_HANDLE);
+    for (VkSemaphore& semaphore : _renderFinished)
+    {
+        if (vkCreateSemaphore(_device, &semaphoreInfo, nullptr, &semaphore) != VK_SUCCESS)
+        {
+            LOG_ERROR(Graphics, "Vulkan: failed to create per-image render semaphore");
+            return false;
+        }
     }
     return true;
 }
@@ -551,6 +730,13 @@ bool EngineVK::RecordClearCommand(uint32_t imageIndex)
 
 void EngineVK::DestroySwapchain()
 {
+    for (VkSemaphore semaphore : _renderFinished)
+    {
+        if (semaphore)
+            vkDestroySemaphore(_device, semaphore, nullptr);
+    }
+    _renderFinished.clear();
+
     if (_device && !_commandBuffers.empty())
     {
         vkFreeCommandBuffers(_device, _commandPool, static_cast<uint32_t>(_commandBuffers.size()),
@@ -559,6 +745,8 @@ void EngineVK::DestroySwapchain()
     }
     _swapchainImages.clear();
     _swapchainImageLayouts.clear();
+    _swapchainFormat = VK_FORMAT_UNDEFINED;
+    _swapchainExtent = {};
     if (_swapchain)
     {
         vkDestroySwapchainKHR(_device, _swapchain, nullptr);
@@ -573,20 +761,27 @@ bool EngineVK::RecreateSwapchain()
 
     vkDeviceWaitIdle(_device);
     DestroySwapchain();
-    _swapchainDirty = false;
-    return CreateSwapchain();
+    const bool recreated = CreateSwapchain() && CreateSyncObjects();
+    _swapchainDirty = !recreated;
+    return recreated;
 }
 
 void EngineVK::PresentClearFrame()
 {
-    if (!_device || !_swapchain)
+    if (!_device)
         return;
+
+    if (!_swapchain)
+    {
+        if (_swapchainDirty)
+            RecreateSwapchain();
+        return;
+    }
 
     if (_swapchainDirty && !RecreateSwapchain())
         return;
 
     vkWaitForFences(_device, 1, &_inFlight, VK_TRUE, UINT64_MAX);
-    vkResetFences(_device, 1, &_inFlight);
 
     uint32_t imageIndex = 0;
     VkResult result = vkAcquireNextImageKHR(_device, _swapchain, UINT64_MAX, _imageAvailable, VK_NULL_HANDLE,
@@ -605,6 +800,8 @@ void EngineVK::PresentClearFrame()
     if (!RecordClearCommand(imageIndex))
         return;
 
+    vkResetFences(_device, 1, &_inFlight);
+
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -614,12 +811,13 @@ void EngineVK::PresentClearFrame()
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &_commandBuffers[imageIndex];
     submitInfo.signalSemaphoreCount = 1;
-    submitInfo.pSignalSemaphores = &_renderFinished;
+    submitInfo.pSignalSemaphores = &_renderFinished[imageIndex];
 
     result = vkQueueSubmit(_graphicsQueue, 1, &submitInfo, _inFlight);
     if (result != VK_SUCCESS)
     {
         LOG_ERROR(Graphics, "Vulkan: vkQueueSubmit failed: {}", VkResultName(result));
+        RecreateSignaledFence(_device, _inFlight);
         return;
     }
     _swapchainImageLayouts[imageIndex] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
@@ -627,7 +825,7 @@ void EngineVK::PresentClearFrame()
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
-    presentInfo.pWaitSemaphores = &_renderFinished;
+    presentInfo.pWaitSemaphores = &_renderFinished[imageIndex];
     presentInfo.swapchainCount = 1;
     presentInfo.pSwapchains = &_swapchain;
     presentInfo.pImageIndices = &imageIndex;
@@ -654,11 +852,6 @@ void EngineVK::Shutdown()
             vkDestroyFence(_device, _inFlight, nullptr);
             _inFlight = VK_NULL_HANDLE;
         }
-        if (_renderFinished)
-        {
-            vkDestroySemaphore(_device, _renderFinished, nullptr);
-            _renderFinished = VK_NULL_HANDLE;
-        }
         if (_imageAvailable)
         {
             vkDestroySemaphore(_device, _imageAvailable, nullptr);
@@ -677,6 +870,11 @@ void EngineVK::Shutdown()
     {
         SDL_Vulkan_DestroySurface(_instance, _surface, nullptr);
         _surface = VK_NULL_HANDLE;
+    }
+    if (_debugMessenger)
+    {
+        DestroyDebugUtilsMessenger(_instance, _debugMessenger);
+        _debugMessenger = VK_NULL_HANDLE;
     }
     if (_instance)
     {
@@ -758,11 +956,13 @@ bool EngineVK::SetWindowMode(WindowMode mode)
     {
         SDL_SetWindowBordered(_window, false);
         _windowMode = WindowMode::Borderless;
+        OnResized();
         return true;
     }
 
     SDL_SetWindowBordered(_window, true);
     _windowMode = WindowMode::Windowed;
+    OnResized();
     return true;
 }
 
@@ -771,6 +971,8 @@ void EngineVK::OnResized()
     if (_window)
         SDL_GetWindowSizeInPixels(_window, &_width, &_height);
     _swapchainDirty = true;
+    if (_width <= 0 || _height <= 0)
+        return;
     FireResizePostHook(_width, _height);
 }
 

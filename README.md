@@ -72,8 +72,8 @@ smoke-testable.
   surface, physical-device selection, and logical device.
 - [x] Add a minimal Vulkan swapchain.
 - [x] Clear to a known color, present one frame, and shut down cleanly.
-- [ ] Add a Vulkan debug messenger and validation-layer diagnostics.
-- [ ] Harden resize and swapchain recreation under validation layers.
+- [x] Add a Vulkan debug messenger and validation-layer diagnostics.
+- [x] Harden basic resize and swapchain recreation under validation layers.
 
 ### Phase 2 - Vulkan Raster Parity
 
