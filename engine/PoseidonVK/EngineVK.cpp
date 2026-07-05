@@ -2,6 +2,7 @@
 
 #include <PoseidonVK/BootstrapPushConstantsVK.hpp>
 #include <PoseidonVK/BufferVK.hpp>
+#include <PoseidonVK/DescriptorBindingsVK.hpp>
 #include <PoseidonVK/DrawConstantsVK.hpp>
 #include <PoseidonVK/RenderStateVK.hpp>
 #include <Poseidon/Core/Application.hpp>
@@ -745,22 +746,8 @@ bool EngineVK::EnsureDrawConstantsBufferCapacity(std::size_t drawCount)
 
 bool EngineVK::CreateFrameDescriptorLayout()
 {
-    VkDescriptorSetLayoutBinding frameConstantsBinding{};
-    frameConstantsBinding.binding = 0;
-    frameConstantsBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    frameConstantsBinding.descriptorCount = 1;
-    frameConstantsBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    VkDescriptorSetLayoutBinding drawConstantsBinding{};
-    drawConstantsBinding.binding = 1;
-    drawConstantsBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    drawConstantsBinding.descriptorCount = 1;
-    drawConstantsBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-
-    const std::array<VkDescriptorSetLayoutBinding, 2> bindings = {
-        frameConstantsBinding,
-        drawConstantsBinding,
-    };
+    const std::array<VkDescriptorSetLayoutBinding, vk::kFrameDescriptorSetBindingCount> bindings =
+        vk::MakeFrameDescriptorSetLayoutBindings();
 
     VkDescriptorSetLayoutCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -781,10 +768,8 @@ bool EngineVK::CreateFrameDescriptorLayout()
 
 bool EngineVK::CreateFrameDescriptorSet()
 {
-    const std::array<VkDescriptorPoolSize, 2> poolSizes = {
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
-    };
+    const std::array<VkDescriptorPoolSize, vk::kFrameDescriptorSetBindingCount> poolSizes =
+        vk::MakeFrameDescriptorPoolSizes();
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -841,20 +826,10 @@ void EngineVK::UpdateFrameDescriptorSet()
     drawBufferInfo.offset = 0;
     drawBufferInfo.range = _drawConstantsBuffer.size;
 
-    std::array<VkWriteDescriptorSet, 2> writes{};
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = _frameDescriptorSet;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[0].pBufferInfo = &frameBufferInfo;
-
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = _frameDescriptorSet;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    writes[1].pBufferInfo = &drawBufferInfo;
+    std::array<VkWriteDescriptorSet, vk::kFrameDescriptorSetBindingCount> writes = {
+        vk::MakeFrameConstantsDescriptorWrite(_frameDescriptorSet, &frameBufferInfo),
+        vk::MakeDrawConstantsDescriptorWrite(_frameDescriptorSet, &drawBufferInfo),
+    };
 
     vkUpdateDescriptorSets(_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }

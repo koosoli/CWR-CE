@@ -128,4 +128,52 @@ inline VkPipelineColorBlendAttachmentState BuildColorBlendAttachmentState(render
     return state;
 }
 
+// Sampler state translation. These mappings mirror the GL33 sampler-state
+// table in EngineGL33_State.cpp so a Vulkan sampler reads identically to its
+// GL33 counterpart for the same `SamplerMode`:
+//
+//   filter Point  -> mag NEAREST, min NEAREST_MIPMAP_NEAREST, mipmap NEAREST
+//   filter Linear -> mag LINEAR,  min LINEAR_MIPMAP_LINEAR,  mipmap LINEAR
+//   clampU/V true -> CLAMP_TO_EDGE; false -> REPEAT
+inline VkFilter ToVkMagFilter(render::SamplerFilter filter) noexcept
+{
+    return filter == render::SamplerFilter::Point ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+}
+
+inline VkFilter ToVkMinFilter(render::SamplerFilter filter) noexcept
+{
+    return filter == render::SamplerFilter::Point ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+}
+
+inline VkSamplerMipmapMode ToVkMipmapMode(render::SamplerFilter filter) noexcept
+{
+    return filter == render::SamplerFilter::Point ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+                                                   : VK_SAMPLER_MIPMAP_MODE_LINEAR;
+}
+
+inline VkSamplerAddressMode ToVkAddressMode(bool clamp) noexcept
+{
+    return clamp ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+}
+
+inline VkSamplerCreateInfo BuildSamplerState(const render::SamplerMode& sampler) noexcept
+{
+    VkSamplerCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    info.magFilter = ToVkMagFilter(sampler.filter);
+    info.minFilter = ToVkMinFilter(sampler.filter);
+    info.mipmapMode = ToVkMipmapMode(sampler.filter);
+    info.addressModeU = ToVkAddressMode(sampler.clampU);
+    info.addressModeV = ToVkAddressMode(sampler.clampV);
+    info.addressModeW = ToVkAddressMode(sampler.clampV);
+    info.borderColor = VK_BORDER_COLOR_INT_TRANSPARENT_BLACK;
+    info.unnormalizedCoordinates = VK_FALSE;
+    info.compareEnable = VK_FALSE;
+    info.compareOp = VK_COMPARE_OP_NEVER;
+    info.mipLodBias = 0.0f;
+    info.minLod = 0.0f;
+    info.maxLod = VK_LOD_CLAMP_NONE;
+    return info;
+}
+
 } // namespace Poseidon::vk

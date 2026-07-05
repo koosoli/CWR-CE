@@ -90,3 +90,58 @@ TEST_CASE("Vulkan render state maps blend descriptors", "[vulkan][render-state]"
         CHECK(state.dstColorBlendFactor == VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA);
     }
 }
+
+TEST_CASE("Vulkan sampler state maps filter descriptors", "[vulkan][render-state]")
+{
+    using Poseidon::render::SamplerFilter;
+
+    CHECK(Poseidon::vk::ToVkMagFilter(SamplerFilter::Point) == VK_FILTER_NEAREST);
+    CHECK(Poseidon::vk::ToVkMagFilter(SamplerFilter::Linear) == VK_FILTER_LINEAR);
+    CHECK(Poseidon::vk::ToVkMinFilter(SamplerFilter::Point) == VK_FILTER_NEAREST);
+    CHECK(Poseidon::vk::ToVkMinFilter(SamplerFilter::Linear) == VK_FILTER_LINEAR);
+    CHECK(Poseidon::vk::ToVkMipmapMode(SamplerFilter::Point) == VK_SAMPLER_MIPMAP_MODE_NEAREST);
+    CHECK(Poseidon::vk::ToVkMipmapMode(SamplerFilter::Linear) == VK_SAMPLER_MIPMAP_MODE_LINEAR);
+}
+
+TEST_CASE("Vulkan sampler state maps clamp descriptors", "[vulkan][render-state]")
+{
+    CHECK(Poseidon::vk::ToVkAddressMode(true) == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+    CHECK(Poseidon::vk::ToVkAddressMode(false) == VK_SAMPLER_ADDRESS_MODE_REPEAT);
+}
+
+TEST_CASE("Vulkan sampler create info matches the sampler descriptor", "[vulkan][render-state]")
+{
+    using Poseidon::render::SamplerFilter;
+    using Poseidon::render::SamplerMode;
+
+    {
+        const SamplerMode sampler{SamplerFilter::Linear, false, false};
+        const VkSamplerCreateInfo info = Poseidon::vk::BuildSamplerState(sampler);
+        CHECK(info.sType == VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO);
+        CHECK(info.magFilter == VK_FILTER_LINEAR);
+        CHECK(info.minFilter == VK_FILTER_LINEAR);
+        CHECK(info.mipmapMode == VK_SAMPLER_MIPMAP_MODE_LINEAR);
+        CHECK(info.addressModeU == VK_SAMPLER_ADDRESS_MODE_REPEAT);
+        CHECK(info.addressModeV == VK_SAMPLER_ADDRESS_MODE_REPEAT);
+        CHECK(info.addressModeW == VK_SAMPLER_ADDRESS_MODE_REPEAT);
+        CHECK(info.unnormalizedCoordinates == VK_FALSE);
+        CHECK(info.maxLod == VK_LOD_CLAMP_NONE);
+    }
+    {
+        const SamplerMode sampler{SamplerFilter::Point, true, true};
+        const VkSamplerCreateInfo info = Poseidon::vk::BuildSamplerState(sampler);
+        CHECK(info.magFilter == VK_FILTER_NEAREST);
+        CHECK(info.minFilter == VK_FILTER_NEAREST);
+        CHECK(info.mipmapMode == VK_SAMPLER_MIPMAP_MODE_NEAREST);
+        CHECK(info.addressModeU == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+        CHECK(info.addressModeV == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+        CHECK(info.addressModeW == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+    }
+    {
+        const SamplerMode sampler{SamplerFilter::Linear, true, false};
+        const VkSamplerCreateInfo info = Poseidon::vk::BuildSamplerState(sampler);
+        CHECK(info.addressModeU == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE);
+        CHECK(info.addressModeV == VK_SAMPLER_ADDRESS_MODE_REPEAT);
+        CHECK(info.addressModeW == VK_SAMPLER_ADDRESS_MODE_REPEAT);
+    }
+}
