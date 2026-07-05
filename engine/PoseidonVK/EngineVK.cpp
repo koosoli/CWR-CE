@@ -1,6 +1,7 @@
 #include <PoseidonVK/EngineVK.hpp>
 
 #include <PoseidonVK/BootstrapPushConstantsVK.hpp>
+#include <PoseidonVK/BufferVK.hpp>
 #include <Poseidon/Core/Application.hpp>
 #include <Poseidon/Graphics/Shared/WindowPlacement.hpp>
 #include <Poseidon/Foundation/Framework/AppFrame.hpp>
@@ -12,6 +13,7 @@
 #include <glslang/SPIRV/GlslangToSpv.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -39,6 +41,24 @@ constexpr const char kBootstrapTriangleVertexShader[] =
 constexpr const char kBootstrapTriangleFragmentShader[] =
 #include <PoseidonVK/Shaders/bootstrap_triangle.frag.glsl.hpp>
     ;
+
+struct BootstrapVertex
+{
+    float position[2];
+    float color[3];
+};
+
+static_assert(sizeof(BootstrapVertex) == sizeof(float) * 5);
+
+constexpr BootstrapVertex kBootstrapTriangleVertices[] = {
+    {{0.0f, -0.5f}, {0.95f, 0.18f, 0.16f}},
+    {{0.5f, 0.5f}, {0.18f, 0.75f, 0.32f}},
+    {{-0.5f, 0.5f}, {0.20f, 0.42f, 0.95f}},
+};
+
+constexpr uint16_t kBootstrapTriangleIndices[] = {0, 1, 2};
+constexpr uint32_t kBootstrapTriangleIndexCount =
+    static_cast<uint32_t>(sizeof(kBootstrapTriangleIndices) / sizeof(kBootstrapTriangleIndices[0]));
 
 bool HasInstanceExtension(const char* requiredExtension)
 {
@@ -98,6 +118,8 @@ const char* VkResultName(VkResult result)
             return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
         case VK_ERROR_INITIALIZATION_FAILED:
             return "VK_ERROR_INITIALIZATION_FAILED";
+        case VK_ERROR_FEATURE_NOT_PRESENT:
+            return "VK_ERROR_FEATURE_NOT_PRESENT";
         case VK_ERROR_MEMORY_MAP_FAILED:
             return "VK_ERROR_MEMORY_MAP_FAILED";
         case VK_ERROR_EXTENSION_NOT_PRESENT:
@@ -222,22 +244,6 @@ bool RecreateSignaledFence(VkDevice device, VkFence& fence)
     fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
     return vkCreateFence(device, &fenceInfo, nullptr, &fence) == VK_SUCCESS;
-}
-
-uint32_t FindMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags properties)
-{
-    VkPhysicalDeviceMemoryProperties memoryProperties{};
-    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
-
-    for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; ++i)
-    {
-        const bool typeMatches = (typeFilter & (1u << i)) != 0;
-        const bool flagsMatch = (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties;
-        if (typeMatches && flagsMatch)
-            return i;
-    }
-
-    return UINT32_MAX;
 }
 
 void EnsureGlslangInitialized()
@@ -374,9 +380,9 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
     }
 
     if (!CreateInstance() || !CreateDebugMessenger() || !CreateSurface() || !PickPhysicalDevice() || !CreateDevice() ||
-        !CreateFrameConstantsBuffer() || !CreateFrameDescriptorLayout() || !CreatePipelineLayout() ||
-        !CreateFrameDescriptorSet() || !CreateCommandPool() || !CreateSwapchain() || !CreateBootstrapPipeline() ||
-        !CreateSyncObjects())
+        !CreateFrameConstantsBuffer() || !CreateBootstrapVertexBuffer() || !CreateBootstrapIndexBuffer() ||
+        !CreateFrameDescriptorLayout() || !CreatePipelineLayout() || !CreateFrameDescriptorSet() ||
+        !CreateCommandPool() || !CreateSwapchain() || !CreateBootstrapPipeline() || !CreateSyncObjects())
     {
         Shutdown();
         return false;
@@ -642,66 +648,57 @@ bool EngineVK::CreatePipelineLayout()
 
 bool EngineVK::CreateFrameConstantsBuffer()
 {
-    VkBufferCreateInfo bufferInfo{};
-    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = sizeof(vk::FrameConstantsVK);
-    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VkResult result = vkCreateBuffer(_device, &bufferInfo, nullptr, &_frameConstantsBuffer);
+    const VkResult result = vk::CreateHostVisibleBuffer(_physicalDevice, _device, sizeof(vk::FrameConstantsVK),
+                                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, _frameConstantsBuffer);
     if (result != VK_SUCCESS)
     {
-        LOG_ERROR(Graphics, "Vulkan: vkCreateBuffer(frame constants) failed: {}", VkResultName(result));
-        return false;
-    }
-
-    VkMemoryRequirements requirements{};
-    vkGetBufferMemoryRequirements(_device, _frameConstantsBuffer, &requirements);
-
-    const uint32_t memoryType =
-        FindMemoryType(_physicalDevice, requirements.memoryTypeBits,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (memoryType == UINT32_MAX)
-    {
-        LOG_ERROR(Graphics, "Vulkan: no host-visible memory type for frame constants buffer");
-        DestroyFrameConstantsBuffer();
-        return false;
-    }
-
-    VkMemoryAllocateInfo allocateInfo{};
-    allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocateInfo.allocationSize = requirements.size;
-    allocateInfo.memoryTypeIndex = memoryType;
-
-    result = vkAllocateMemory(_device, &allocateInfo, nullptr, &_frameConstantsMemory);
-    if (result != VK_SUCCESS)
-    {
-        LOG_ERROR(Graphics, "Vulkan: vkAllocateMemory(frame constants) failed: {}", VkResultName(result));
-        DestroyFrameConstantsBuffer();
-        return false;
-    }
-
-    result = vkBindBufferMemory(_device, _frameConstantsBuffer, _frameConstantsMemory, 0);
-    if (result != VK_SUCCESS)
-    {
-        LOG_ERROR(Graphics, "Vulkan: vkBindBufferMemory(frame constants) failed: {}", VkResultName(result));
-        DestroyFrameConstantsBuffer();
-        return false;
-    }
-
-    result = vkMapMemory(_device, _frameConstantsMemory, 0, sizeof(vk::FrameConstantsVK), 0, &_frameConstantsMapped);
-    if (result != VK_SUCCESS)
-    {
-        LOG_ERROR(Graphics, "Vulkan: vkMapMemory(frame constants) failed: {}", VkResultName(result));
-        DestroyFrameConstantsBuffer();
+        LOG_ERROR(Graphics, "Vulkan: frame constants buffer creation failed: {}", VkResultName(result));
         return false;
     }
 
     UploadFrameConstants();
-    SetObjectName(VK_OBJECT_TYPE_BUFFER, VulkanObjectHandle(_frameConstantsBuffer),
+    SetObjectName(VK_OBJECT_TYPE_BUFFER, VulkanObjectHandle(_frameConstantsBuffer.buffer),
                   "PoseidonVK Frame Constants Buffer");
-    SetObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, VulkanObjectHandle(_frameConstantsMemory),
+    SetObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, VulkanObjectHandle(_frameConstantsBuffer.memory),
                   "PoseidonVK Frame Constants Memory");
+    return true;
+}
+
+bool EngineVK::CreateBootstrapVertexBuffer()
+{
+    const VkResult result =
+        vk::CreateHostVisibleBuffer(_physicalDevice, _device, sizeof(kBootstrapTriangleVertices),
+                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, _bootstrapVertexBuffer);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: bootstrap vertex buffer creation failed: {}", VkResultName(result));
+        return false;
+    }
+
+    vk::UploadMappedBuffer(_bootstrapVertexBuffer, kBootstrapTriangleVertices, sizeof(kBootstrapTriangleVertices));
+    SetObjectName(VK_OBJECT_TYPE_BUFFER, VulkanObjectHandle(_bootstrapVertexBuffer.buffer),
+                  "PoseidonVK Bootstrap Triangle Vertex Buffer");
+    SetObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, VulkanObjectHandle(_bootstrapVertexBuffer.memory),
+                  "PoseidonVK Bootstrap Triangle Vertex Memory");
+    return true;
+}
+
+bool EngineVK::CreateBootstrapIndexBuffer()
+{
+    const VkResult result =
+        vk::CreateHostVisibleBuffer(_physicalDevice, _device, sizeof(kBootstrapTriangleIndices),
+                                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT, _bootstrapIndexBuffer);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: bootstrap index buffer creation failed: {}", VkResultName(result));
+        return false;
+    }
+
+    vk::UploadMappedBuffer(_bootstrapIndexBuffer, kBootstrapTriangleIndices, sizeof(kBootstrapTriangleIndices));
+    SetObjectName(VK_OBJECT_TYPE_BUFFER, VulkanObjectHandle(_bootstrapIndexBuffer.buffer),
+                  "PoseidonVK Bootstrap Triangle Index Buffer");
+    SetObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, VulkanObjectHandle(_bootstrapIndexBuffer.memory),
+                  "PoseidonVK Bootstrap Triangle Index Memory");
     return true;
 }
 
@@ -768,7 +765,7 @@ bool EngineVK::CreateFrameDescriptorSet()
     }
 
     VkDescriptorBufferInfo bufferInfo{};
-    bufferInfo.buffer = _frameConstantsBuffer;
+    bufferInfo.buffer = _frameConstantsBuffer.buffer;
     bufferInfo.offset = 0;
     bufferInfo.range = sizeof(vk::FrameConstantsVK);
 
@@ -1059,6 +1056,24 @@ bool EngineVK::CreateBootstrapPipeline()
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkVertexInputBindingDescription vertexBinding{};
+    vertexBinding.binding = 0;
+    vertexBinding.stride = sizeof(BootstrapVertex);
+    vertexBinding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription vertexAttributes[2]{};
+    vertexAttributes[0].location = 0;
+    vertexAttributes[0].binding = 0;
+    vertexAttributes[0].format = VK_FORMAT_R32G32_SFLOAT;
+    vertexAttributes[0].offset = offsetof(BootstrapVertex, position);
+    vertexAttributes[1].location = 1;
+    vertexAttributes[1].binding = 0;
+    vertexAttributes[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    vertexAttributes[1].offset = offsetof(BootstrapVertex, color);
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &vertexBinding;
+    vertexInput.vertexAttributeDescriptionCount = 2;
+    vertexInput.pVertexAttributeDescriptions = vertexAttributes;
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1237,8 +1252,7 @@ void EngineVK::EndDebugLabel(VkCommandBuffer commandBuffer) const
 
 void EngineVK::UploadFrameConstants()
 {
-    if (_frameConstantsMapped)
-        std::memcpy(_frameConstantsMapped, &_lastFrameConstants, sizeof(_lastFrameConstants));
+    vk::UploadMappedBuffer(_frameConstantsBuffer, &_lastFrameConstants, sizeof(_lastFrameConstants));
 }
 
 void EngineVK::DestroyFrameDescriptorResources()
@@ -1299,6 +1313,14 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                                                   static_cast<int>(_swapchainExtent.height), _clearColor.float32);
 
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _bootstrapPipeline);
+        if (_bootstrapVertexBuffer.buffer)
+        {
+            VkBuffer vertexBuffers[] = {_bootstrapVertexBuffer.buffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        }
+        if (_bootstrapIndexBuffer.buffer)
+            vkCmdBindIndexBuffer(commandBuffer, _bootstrapIndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT16);
         if (_frameDescriptorSet)
         {
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipelineLayout, 0, 1,
@@ -1306,7 +1328,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         }
         vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, vk::kBootstrapPushConstantsSize, &constants);
-        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        vkCmdDrawIndexed(commandBuffer, kBootstrapTriangleIndexCount, 1, 0, 0, 0);
     }
     vkCmdEndRenderPass(commandBuffer);
 
@@ -1374,21 +1396,17 @@ void EngineVK::DestroySwapchain()
 
 void EngineVK::DestroyFrameConstantsBuffer()
 {
-    if (_device && _frameConstantsMapped)
-    {
-        vkUnmapMemory(_device, _frameConstantsMemory);
-        _frameConstantsMapped = nullptr;
-    }
-    if (_device && _frameConstantsBuffer)
-    {
-        vkDestroyBuffer(_device, _frameConstantsBuffer, nullptr);
-        _frameConstantsBuffer = VK_NULL_HANDLE;
-    }
-    if (_device && _frameConstantsMemory)
-    {
-        vkFreeMemory(_device, _frameConstantsMemory, nullptr);
-        _frameConstantsMemory = VK_NULL_HANDLE;
-    }
+    vk::DestroyBuffer(_device, _frameConstantsBuffer);
+}
+
+void EngineVK::DestroyBootstrapVertexBuffer()
+{
+    vk::DestroyBuffer(_device, _bootstrapVertexBuffer);
+}
+
+void EngineVK::DestroyBootstrapIndexBuffer()
+{
+    vk::DestroyBuffer(_device, _bootstrapIndexBuffer);
 }
 
 bool EngineVK::RecreateSwapchain()
@@ -1505,6 +1523,8 @@ void EngineVK::Shutdown()
         }
         DestroyFrameDescriptorResources();
         DestroyFrameConstantsBuffer();
+        DestroyBootstrapVertexBuffer();
+        DestroyBootstrapIndexBuffer();
         vkDestroyDevice(_device, nullptr);
         _device = VK_NULL_HANDLE;
     }

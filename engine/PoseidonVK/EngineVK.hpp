@@ -1,5 +1,6 @@
 #pragma once
 
+#include <PoseidonVK/BufferVK.hpp>
 #include <PoseidonVK/FrameConstantsVK.hpp>
 #include <Poseidon/Graphics/Dummy/EngineDummy.hpp>
 #include <Poseidon/Graphics/Shared/WindowMode.hpp>
@@ -51,6 +52,8 @@ class EngineVK : public EngineDummy
     bool PickPhysicalDevice();
     bool CreateDevice();
     bool CreateFrameConstantsBuffer();
+    bool CreateBootstrapVertexBuffer();
+    bool CreateBootstrapIndexBuffer();
     bool CreateFrameDescriptorLayout();
     bool CreateFrameDescriptorSet();
     bool CreatePipelineLayout();
@@ -65,6 +68,8 @@ class EngineVK : public EngineDummy
     void UploadFrameConstants();
     void DestroyFrameDescriptorResources();
     void DestroyFrameConstantsBuffer();
+    void DestroyBootstrapVertexBuffer();
+    void DestroyBootstrapIndexBuffer();
     void DestroySwapchain();
     bool RecreateSwapchain();
     void PresentBootstrapFrame();
@@ -79,9 +84,9 @@ class EngineVK : public EngineDummy
     VkDevice _device = VK_NULL_HANDLE;
     VkQueue _graphicsQueue = VK_NULL_HANDLE;
     VkQueue _presentQueue = VK_NULL_HANDLE;
-    VkBuffer _frameConstantsBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory _frameConstantsMemory = VK_NULL_HANDLE;
-    void* _frameConstantsMapped = nullptr;
+    vk::BufferVK _frameConstantsBuffer;
+    vk::BufferVK _bootstrapVertexBuffer;
+    vk::BufferVK _bootstrapIndexBuffer;
     VkDescriptorSetLayout _frameDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool _descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet _frameDescriptorSet = VK_NULL_HANDLE;

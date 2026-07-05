@@ -1,10 +1,12 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <PoseidonVK/BufferVK.hpp>
 #include <PoseidonVK/FrameConstantsVK.hpp>
 #include <Poseidon/Graphics/Rendering/Frame/BuildFrame.hpp>
 
 #include <cstddef>
+#include <cstdint>
 
 namespace frame = Poseidon::render::frame;
 
@@ -51,6 +53,29 @@ TEST_CASE("Vulkan frame constants match std140 descriptor layout", "[vulkan][fra
     STATIC_REQUIRE(offsetof(FrameConstantsVK, fogParams) == 176);
     STATIC_REQUIRE(offsetof(FrameConstantsVK, fogColor) == 192);
     STATIC_REQUIRE(sizeof(FrameConstantsVK) == 208);
+}
+
+TEST_CASE("Vulkan mapped buffer upload copies frame constants bytes", "[vulkan][frame-constants]")
+{
+    Poseidon::vk::FrameConstantsVK source;
+    source.viewport[0] = 8.0f;
+    source.viewport[1] = 16.0f;
+    source.viewport[2] = 1280.0f;
+    source.viewport[3] = 720.0f;
+    source.fogParams[0] = 25.0f;
+
+    Poseidon::vk::FrameConstantsVK destination;
+    Poseidon::vk::BufferVK buffer;
+    buffer.mapped = &destination;
+    buffer.size = sizeof(destination);
+
+    Poseidon::vk::UploadMappedBuffer(buffer, &source, sizeof(source));
+
+    CHECK(destination.viewport[0] == 8.0f);
+    CHECK(destination.viewport[1] == 16.0f);
+    CHECK(destination.viewport[2] == 1280.0f);
+    CHECK(destination.viewport[3] == 720.0f);
+    CHECK(destination.fogParams[0] == 25.0f);
 }
 
 TEST_CASE("Vulkan frame constants preserve frame camera matrices", "[vulkan][frame-constants]")

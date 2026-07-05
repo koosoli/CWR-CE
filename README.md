@@ -1,21 +1,31 @@
-# Arma: Cold War Assault - Remastered - Community Edition (CWR-CE) - Modernization Fork
+# PoseidonVK
+
+Arma: Cold War Assault - Remastered - Community Edition modernization fork.
 
 [![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/koosoli)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-support-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/koosoli)
 
-`koosoli/CWR-CE` is a modernization-focused fork of the community
+`koosoli/PoseidonVK` is a modernization-focused fork of the community
 [`ofpisnotdead-com/CWR-CE`](https://github.com/ofpisnotdead-com/CWR-CE)
 codebase, which continues Bohemia Interactive's official source release for the
 classic Poseidon engine behind *Arma: Cold War Assault* / *Operation Flashpoint:
 Cold War Crisis*.
 
-This fork tries to stay compatible with upstream CWR-CE for as long as practical
-while deliberately diverging where modernization requires a different
+PoseidonVK tries to stay compatible with upstream CWR-CE for as long as
+practical while deliberately diverging where modernization requires a different
 architecture. The goal is not to replace the upstream project. The goal is to
 explore a more explicit, backend-neutral, modern engine direction while keeping
 the original game and data formats alive.
 
 This project is not an official Bohemia Interactive product.
+
+## Current Preview
+
+![PoseidonVK GL33 smoke-test screenshot showing in-game soldiers and terrain](Screenshots/1.png)
+
+Current GL33 smoke-test screenshot using separate demo game data. The Vulkan
+backend is in active bootstrap/raster-parity work and does not render the full
+game scene yet.
 
 ## Modernization Goals
 
@@ -95,6 +105,8 @@ smoke-testable.
   the viewport path for the bootstrap primitive.
 - [x] Upload Vulkan frame constants into a backend-owned uniform buffer and
   descriptor set.
+- [x] Upload bootstrap vertex and index buffers through the Vulkan buffer
+  helper and draw the primitive with `vkCmdDrawIndexed`.
 - [ ] Feed camera, projection, fog, lighting, and per-draw constants into Vulkan.
 - [ ] Upload static and dynamic mesh buffers through backend-owned resources.
 - [ ] Implement texture creation, sampler state, mip use, and fallback behavior.
@@ -201,7 +213,7 @@ For local smoke testing in this fork, the demo executable is usually the safest
 target:
 
 ```sh
-cmake --build build/win-x64-clang-dbg --target PoseidonGameDemo --config Debug
+cmake --build build/codex-vk-dbg --target PoseidonGameDemo --config Debug
 ```
 
 ### Smoke Testing
