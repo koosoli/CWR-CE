@@ -66,6 +66,8 @@ class EngineVK : public EngineDummy
     bool CreatePipelineLayout();
     bool CreateScenePipelineLayout();
     bool CreateSwapchain();
+    bool CreateDepthResources();
+    VkFormat FindDepthFormat() const;
     bool CreateBootstrapPipeline();
     bool CreateScenePipeline();
     bool CreateCommandPool();
@@ -84,6 +86,7 @@ class EngineVK : public EngineDummy
     void DestroySceneVertexBuffer();
     void DestroySceneIndexBuffer();
     void DestroyScenePipelineLayout();
+    void DestroyDepthResources();
     void DestroySwapchain();
     bool RecreateSwapchain();
     void PresentBootstrapFrame();
@@ -114,6 +117,10 @@ class EngineVK : public EngineDummy
     VkSwapchainKHR _swapchain = VK_NULL_HANDLE;
     VkFormat _swapchainFormat = VK_FORMAT_UNDEFINED;
     VkExtent2D _swapchainExtent{};
+    VkFormat _depthFormat = VK_FORMAT_UNDEFINED;
+    VkImage _depthImage = VK_NULL_HANDLE;
+    VkDeviceMemory _depthImageMemory = VK_NULL_HANDLE;
+    VkImageView _depthImageView = VK_NULL_HANDLE;
     VkRenderPass _renderPass = VK_NULL_HANDLE;
     VkCommandPool _commandPool = VK_NULL_HANDLE;
     std::vector<VkImage> _swapchainImages;

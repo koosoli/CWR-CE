@@ -1021,36 +1021,60 @@ bool EngineVK::CreateSwapchain()
     _swapchainFormat = surfaceFormat.format;
     _swapchainExtent = extent;
 
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = _swapchainFormat;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    VkAttachmentDescription attachments[2]{};
+    attachments[0].format = _swapchainFormat;
+    attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    const VkFormat depthFormat = FindDepthFormat();
+    if (depthFormat == VK_FORMAT_UNDEFINED)
+    {
+        LOG_ERROR(Graphics, "Vulkan: no supported depth format for render pass");
+        return false;
+    }
+    _depthFormat = depthFormat;
+    attachments[1].format = depthFormat;
+    attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference colorAttachmentRef{};
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+    VkAttachmentReference depthAttachmentRef{};
+    depthAttachmentRef.attachment = 1;
+    depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
+    subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
     VkSubpassDependency dependency{};
     dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
-    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependency.srcStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstStageMask =
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask =
+        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
     VkRenderPassCreateInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.attachmentCount = 2;
+    renderPassInfo.pAttachments = attachments;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
     renderPassInfo.dependencyCount = 1;
@@ -1100,15 +1124,18 @@ bool EngineVK::CreateSwapchain()
         SetObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, VulkanObjectHandle(_swapchainImageViews[i]), viewName.c_str());
     }
 
+    if (!CreateDepthResources())
+        return false;
+
     _framebuffers.resize(actualImageCount, VK_NULL_HANDLE);
     for (uint32_t i = 0; i < actualImageCount; ++i)
     {
-        VkImageView attachments[] = {_swapchainImageViews[i]};
+        VkImageView attachments[] = {_swapchainImageViews[i], _depthImageView};
 
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         framebufferInfo.renderPass = _renderPass;
-        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.attachmentCount = 2;
         framebufferInfo.pAttachments = attachments;
         framebufferInfo.width = _swapchainExtent.width;
         framebufferInfo.height = _swapchainExtent.height;
@@ -1146,6 +1173,139 @@ bool EngineVK::CreateSwapchain()
     LOG_INFO(Graphics, "Vulkan: swapchain created {}x{} images={} format={}", _swapchainExtent.width,
              _swapchainExtent.height, actualImageCount, static_cast<int>(_swapchainFormat));
     return true;
+}
+
+VkFormat EngineVK::FindDepthFormat() const
+{
+    const VkFormat candidates[] = {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT,
+                                   VK_FORMAT_D24_UNORM_S8_UINT};
+    for (VkFormat format : candidates)
+    {
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(_physicalDevice, format, &props);
+        if (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)
+            return format;
+    }
+    return VK_FORMAT_UNDEFINED;
+}
+
+bool EngineVK::CreateDepthResources()
+{
+    if (_swapchainExtent.width == 0 || _swapchainExtent.height == 0)
+        return false;
+
+    // _depthFormat is selected during render-pass creation (CreateSwapchain);
+    // re-query only as a fallback if it was not already populated.
+    if (_depthFormat == VK_FORMAT_UNDEFINED)
+        _depthFormat = FindDepthFormat();
+    if (_depthFormat == VK_FORMAT_UNDEFINED)
+    {
+        LOG_ERROR(Graphics, "Vulkan: no depth format with depth-stencil attachment support found");
+        return false;
+    }
+
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = _depthFormat;
+    imageInfo.extent = {_swapchainExtent.width, _swapchainExtent.height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    VkResult result = vkCreateImage(_device, &imageInfo, nullptr, &_depthImage);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: depth image creation failed: {}", VkResultName(result));
+        return false;
+    }
+
+    VkMemoryRequirements memRequirements{};
+    vkGetImageMemoryRequirements(_device, _depthImage, &memRequirements);
+    const uint32_t memoryType =
+        vk::FindMemoryType(_physicalDevice, memRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memoryType == vk::kInvalidMemoryType)
+    {
+        LOG_ERROR(Graphics, "Vulkan: no device-local memory type for depth image");
+        vkDestroyImage(_device, _depthImage, nullptr);
+        _depthImage = VK_NULL_HANDLE;
+        return false;
+    }
+
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = memoryType;
+    result = vkAllocateMemory(_device, &allocInfo, nullptr, &_depthImageMemory);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: depth image memory allocation failed: {}", VkResultName(result));
+        vkDestroyImage(_device, _depthImage, nullptr);
+        _depthImage = VK_NULL_HANDLE;
+        return false;
+    }
+
+    result = vkBindImageMemory(_device, _depthImage, _depthImageMemory, 0);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: depth image memory bind failed: {}", VkResultName(result));
+        vkFreeMemory(_device, _depthImageMemory, nullptr);
+        _depthImageMemory = VK_NULL_HANDLE;
+        vkDestroyImage(_device, _depthImage, nullptr);
+        _depthImage = VK_NULL_HANDLE;
+        return false;
+    }
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = _depthImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = _depthFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    result = vkCreateImageView(_device, &viewInfo, nullptr, &_depthImageView);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: depth image view creation failed: {}", VkResultName(result));
+        vkFreeMemory(_device, _depthImageMemory, nullptr);
+        _depthImageMemory = VK_NULL_HANDLE;
+        vkDestroyImage(_device, _depthImage, nullptr);
+        _depthImage = VK_NULL_HANDLE;
+        return false;
+    }
+
+    SetObjectName(VK_OBJECT_TYPE_IMAGE, VulkanObjectHandle(_depthImage), "PoseidonVK Depth Image");
+    SetObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, VulkanObjectHandle(_depthImageMemory), "PoseidonVK Depth Image Memory");
+    SetObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, VulkanObjectHandle(_depthImageView), "PoseidonVK Depth Image View");
+    return true;
+}
+
+void EngineVK::DestroyDepthResources()
+{
+    if (_depthImageView)
+    {
+        vkDestroyImageView(_device, _depthImageView, nullptr);
+        _depthImageView = VK_NULL_HANDLE;
+    }
+    if (_depthImage)
+    {
+        vkDestroyImage(_device, _depthImage, nullptr);
+        _depthImage = VK_NULL_HANDLE;
+    }
+    if (_depthImageMemory)
+    {
+        vkFreeMemory(_device, _depthImageMemory, nullptr);
+        _depthImageMemory = VK_NULL_HANDLE;
+    }
+    _depthFormat = VK_FORMAT_UNDEFINED;
 }
 
 bool EngineVK::CreateBootstrapPipeline()
@@ -1256,6 +1416,12 @@ bool EngineVK::CreateBootstrapPipeline()
     VkPipelineColorBlendAttachmentState colorBlendAttachment =
         vk::BuildColorBlendAttachmentState(render::BlendMode::Opaque);
 
+    // Bootstrap triangle does not need depth testing, but the render pass now
+    // carries a depth attachment, so the spec requires an explicit depth-stencil
+    // state. Disabled maps to test-enabled/always-pass with no write.
+    VkPipelineDepthStencilStateCreateInfo depthStencil =
+        vk::BuildDepthStencilState(render::DepthMode::Disabled);
+
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.attachmentCount = 1;
@@ -1270,6 +1436,7 @@ bool EngineVK::CreateBootstrapPipeline()
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.layout = _pipelineLayout;
     pipelineInfo.renderPass = _renderPass;
@@ -1388,6 +1555,9 @@ bool EngineVK::CreateScenePipeline()
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil =
+        vk::BuildDepthStencilState(render::DepthMode::Normal);
+
     VkPipelineColorBlendAttachmentState colorBlendAttachment =
         vk::BuildColorBlendAttachmentState(render::BlendMode::Opaque);
 
@@ -1405,8 +1575,7 @@ bool EngineVK::CreateScenePipeline()
     pipelineInfo.pViewportState = &viewportState;
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
-    // Depth state omitted: the bootstrap render pass has no depth attachment
-    // yet. BuildDepthStencilState is ready to supply it once one is added.
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.layout = _scenePipelineLayout;
     pipelineInfo.renderPass = _renderPass;
@@ -1583,8 +1752,10 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
 
     BeginDebugLabel(commandBuffer, "PoseidonVK Bootstrap Render Pass", 0.04f, 0.35f, 0.75f);
 
-    VkClearValue clearValue{};
-    clearValue.color = _clearColor;
+    VkClearValue clearValues[2]{};
+    clearValues[0].color = _clearColor;
+    clearValues[1].depthStencil.depth = 1.0f;
+    clearValues[1].depthStencil.stencil = 0;
 
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1592,8 +1763,8 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     renderPassInfo.framebuffer = _framebuffers[imageIndex];
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = _swapchainExtent;
-    renderPassInfo.clearValueCount = 1;
-    renderPassInfo.pClearValues = &clearValue;
+    renderPassInfo.clearValueCount = 2;
+    renderPassInfo.pClearValues = clearValues;
 
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     if (_bootstrapPipeline)
@@ -1689,6 +1860,8 @@ void EngineVK::DestroySwapchain()
             vkDestroyImageView(_device, imageView, nullptr);
     }
     _swapchainImageViews.clear();
+
+    DestroyDepthResources();
 
     for (VkSemaphore semaphore : _renderFinished)
     {
