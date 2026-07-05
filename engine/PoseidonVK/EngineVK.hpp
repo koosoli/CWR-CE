@@ -71,9 +71,11 @@ class EngineVK : public EngineDummy
     VkSwapchainKHR _swapchain = VK_NULL_HANDLE;
     VkFormat _swapchainFormat = VK_FORMAT_UNDEFINED;
     VkExtent2D _swapchainExtent{};
+    VkRenderPass _renderPass = VK_NULL_HANDLE;
     VkCommandPool _commandPool = VK_NULL_HANDLE;
     std::vector<VkImage> _swapchainImages;
-    std::vector<VkImageLayout> _swapchainImageLayouts;
+    std::vector<VkImageView> _swapchainImageViews;
+    std::vector<VkFramebuffer> _framebuffers;
     std::vector<VkCommandBuffer> _commandBuffers;
     std::vector<VkSemaphore> _renderFinished;
     VkSemaphore _imageAvailable = VK_NULL_HANDLE;

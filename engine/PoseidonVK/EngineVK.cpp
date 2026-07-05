@@ -610,15 +610,108 @@ bool EngineVK::CreateSwapchain()
     _swapchainFormat = surfaceFormat.format;
     _swapchainExtent = extent;
 
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = _swapchainFormat;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+    VkAttachmentReference colorAttachmentRef{};
+    colorAttachmentRef.attachment = 0;
+    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+
+    result = vkCreateRenderPass(_device, &renderPassInfo, nullptr, &_renderPass);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: vkCreateRenderPass failed: {}", VkResultName(result));
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_RENDER_PASS, VulkanObjectHandle(_renderPass), "PoseidonVK Bootstrap Render Pass");
+
     uint32_t actualImageCount = 0;
     vkGetSwapchainImagesKHR(_device, _swapchain, &actualImageCount, nullptr);
     _swapchainImages.resize(actualImageCount);
     vkGetSwapchainImagesKHR(_device, _swapchain, &actualImageCount, _swapchainImages.data());
-    _swapchainImageLayouts.assign(actualImageCount, VK_IMAGE_LAYOUT_UNDEFINED);
+    _swapchainImageViews.resize(actualImageCount, VK_NULL_HANDLE);
     for (uint32_t i = 0; i < actualImageCount; ++i)
     {
         const std::string name = "PoseidonVK Swapchain Image " + std::to_string(i);
         SetObjectName(VK_OBJECT_TYPE_IMAGE, VulkanObjectHandle(_swapchainImages[i]), name.c_str());
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = _swapchainImages[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = _swapchainFormat;
+        viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        result = vkCreateImageView(_device, &viewInfo, nullptr, &_swapchainImageViews[i]);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR(Graphics, "Vulkan: vkCreateImageView failed: {}", VkResultName(result));
+            return false;
+        }
+
+        const std::string viewName = "PoseidonVK Swapchain Image View " + std::to_string(i);
+        SetObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, VulkanObjectHandle(_swapchainImageViews[i]), viewName.c_str());
+    }
+
+    _framebuffers.resize(actualImageCount, VK_NULL_HANDLE);
+    for (uint32_t i = 0; i < actualImageCount; ++i)
+    {
+        VkImageView attachments[] = {_swapchainImageViews[i]};
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = _renderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = attachments;
+        framebufferInfo.width = _swapchainExtent.width;
+        framebufferInfo.height = _swapchainExtent.height;
+        framebufferInfo.layers = 1;
+
+        result = vkCreateFramebuffer(_device, &framebufferInfo, nullptr, &_framebuffers[i]);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR(Graphics, "Vulkan: vkCreateFramebuffer failed: {}", VkResultName(result));
+            return false;
+        }
+
+        const std::string name = "PoseidonVK Framebuffer " + std::to_string(i);
+        SetObjectName(VK_OBJECT_TYPE_FRAMEBUFFER, VulkanObjectHandle(_framebuffers[i]), name.c_str());
     }
 
     _commandBuffers.resize(actualImageCount);
@@ -748,7 +841,7 @@ void EngineVK::EndDebugLabel(VkCommandBuffer commandBuffer) const
 
 bool EngineVK::RecordClearCommand(uint32_t imageIndex)
 {
-    if (imageIndex >= _commandBuffers.size())
+    if (imageIndex >= _commandBuffers.size() || imageIndex >= _framebuffers.size())
         return false;
 
     VkCommandBuffer commandBuffer = _commandBuffers[imageIndex];
@@ -765,46 +858,22 @@ bool EngineVK::RecordClearCommand(uint32_t imageIndex)
         return false;
     }
 
-    BeginDebugLabel(commandBuffer, "PoseidonVK Clear Present", 0.04f, 0.35f, 0.75f);
+    BeginDebugLabel(commandBuffer, "PoseidonVK Render Pass Clear", 0.04f, 0.35f, 0.75f);
 
-    VkImageMemoryBarrier toClear{};
-    toClear.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toClear.oldLayout = _swapchainImageLayouts[imageIndex];
-    toClear.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    toClear.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toClear.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toClear.image = _swapchainImages[imageIndex];
-    toClear.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    toClear.subresourceRange.baseMipLevel = 0;
-    toClear.subresourceRange.levelCount = 1;
-    toClear.subresourceRange.baseArrayLayer = 0;
-    toClear.subresourceRange.layerCount = 1;
-    toClear.srcAccessMask = 0;
-    toClear.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
-                         nullptr, 0, nullptr, 1, &toClear);
+    VkClearValue clearValue{};
+    clearValue.color = _clearColor;
 
-    VkImageSubresourceRange range{};
-    range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    range.baseMipLevel = 0;
-    range.levelCount = 1;
-    range.baseArrayLayer = 0;
-    range.layerCount = 1;
-    vkCmdClearColorImage(commandBuffer, _swapchainImages[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         &_clearColor, 1, &range);
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = _renderPass;
+    renderPassInfo.framebuffer = _framebuffers[imageIndex];
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = _swapchainExtent;
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearValue;
 
-    VkImageMemoryBarrier toPresent{};
-    toPresent.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    toPresent.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toPresent.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toPresent.image = _swapchainImages[imageIndex];
-    toPresent.subresourceRange = range;
-    toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    toPresent.dstAccessMask = 0;
-    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
-                         nullptr, 0, nullptr, 1, &toPresent);
+    vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdEndRenderPass(commandBuffer);
 
     EndDebugLabel(commandBuffer);
 
@@ -819,6 +888,26 @@ bool EngineVK::RecordClearCommand(uint32_t imageIndex)
 
 void EngineVK::DestroySwapchain()
 {
+    for (VkFramebuffer framebuffer : _framebuffers)
+    {
+        if (framebuffer)
+            vkDestroyFramebuffer(_device, framebuffer, nullptr);
+    }
+    _framebuffers.clear();
+
+    if (_renderPass)
+    {
+        vkDestroyRenderPass(_device, _renderPass, nullptr);
+        _renderPass = VK_NULL_HANDLE;
+    }
+
+    for (VkImageView imageView : _swapchainImageViews)
+    {
+        if (imageView)
+            vkDestroyImageView(_device, imageView, nullptr);
+    }
+    _swapchainImageViews.clear();
+
     for (VkSemaphore semaphore : _renderFinished)
     {
         if (semaphore)
@@ -833,7 +922,6 @@ void EngineVK::DestroySwapchain()
         _commandBuffers.clear();
     }
     _swapchainImages.clear();
-    _swapchainImageLayouts.clear();
     _swapchainFormat = VK_FORMAT_UNDEFINED;
     _swapchainExtent = {};
     if (_swapchain)
@@ -891,7 +979,7 @@ void EngineVK::PresentClearFrame()
 
     vkResetFences(_device, 1, &_inFlight);
 
-    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo submitInfo{};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.waitSemaphoreCount = 1;
@@ -909,8 +997,6 @@ void EngineVK::PresentClearFrame()
         RecreateSignaledFence(_device, _inFlight);
         return;
     }
-    _swapchainImageLayouts[imageIndex] = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;

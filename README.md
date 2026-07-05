@@ -81,6 +81,8 @@ smoke-testable.
   objects and the clear-present command path.
 - [x] Add a tested Vulkan frame-constants bridge for camera, viewport, clip
   range, world rect, and fog values.
+- [x] Create swapchain image views, render pass, and framebuffers, then clear
+  through the render-pass path.
 - [ ] Feed camera, projection, fog, lighting, and per-draw constants into Vulkan.
 - [ ] Upload static and dynamic mesh buffers through backend-owned resources.
 - [ ] Implement texture creation, sampler state, mip use, and fallback behavior.

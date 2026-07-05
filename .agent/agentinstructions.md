@@ -54,6 +54,12 @@ When a functional milestone is reached, ask for or perform a manual GL33 smoke
 test with the real executable and original game assets. Give a short checklist
 of what should be visually checked.
 
+When handing a newly compiled `PoseidonGameDemo.exe` to the user for manual
+smoke testing, always tell them what to test for specifically. Name the backend,
+the expected visible behavior, and the most likely regression signs for the
+recent change. Avoid vague requests like "please test it"; give a compact
+checklist tied to the code that changed.
+
 ## Regression-Proof Engineering Guidelines
 
 1. **Test-backed iteration:** Extend tests when changing seams, backend-neutral
