@@ -51,6 +51,9 @@ class EngineVK : public EngineDummy
     bool CreateCommandPool();
     bool CreateSyncObjects();
     bool RecordClearCommand(uint32_t imageIndex);
+    void SetObjectName(VkObjectType objectType, uint64_t objectHandle, const char* name) const;
+    void BeginDebugLabel(VkCommandBuffer commandBuffer, const char* name, float r, float g, float b) const;
+    void EndDebugLabel(VkCommandBuffer commandBuffer) const;
     void DestroySwapchain();
     bool RecreateSwapchain();
     void PresentClearFrame();
@@ -84,6 +87,7 @@ class EngineVK : public EngineDummy
     bool _swapchainDirty = false;
     bool _loggedFirstPresent = false;
     bool _validationEnabled = false;
+    bool _debugUtilsEnabled = false;
     VkClearColorValue _clearColor{{0.04f, 0.09f, 0.16f, 1.0f}};
     int _width = 1;
     int _height = 1;

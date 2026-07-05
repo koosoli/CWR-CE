@@ -8,10 +8,12 @@
 #include <SDL3/SDL_vulkan.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <set>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 extern void SDLInput_BufferKeyEvent(SDL_Scancode sc, bool down, DWORD timestamp);
@@ -154,6 +156,15 @@ void DestroyDebugUtilsMessenger(VkInstance instance, VkDebugUtilsMessengerEXT me
         vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
     if (fn)
         fn(instance, messenger, nullptr);
+}
+
+template <typename Handle>
+uint64_t VulkanObjectHandle(Handle handle)
+{
+    if constexpr (std::is_pointer_v<Handle>)
+        return reinterpret_cast<uint64_t>(handle);
+    else
+        return static_cast<uint64_t>(handle);
 }
 
 VkSurfaceFormatKHR ChooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats)
@@ -337,10 +348,11 @@ bool EngineVK::CreateInstance()
 #ifdef _DEBUG
     const bool hasValidationLayer = HasInstanceLayer(kValidationLayer);
     const bool hasDebugUtils = HasInstanceExtension(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    _debugUtilsEnabled = hasDebugUtils;
     _validationEnabled = hasValidationLayer && hasDebugUtils;
-    if (_validationEnabled)
+    if (_debugUtilsEnabled)
         extensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    else
+    if (!_validationEnabled)
         LOG_WARN(Graphics, "Vulkan: validation disabled ({}={}, {}={})", kValidationLayer,
                  hasValidationLayer ? "yes" : "no", VK_EXT_DEBUG_UTILS_EXTENSION_NAME, hasDebugUtils ? "yes" : "no");
 #endif
@@ -377,6 +389,8 @@ bool EngineVK::CreateInstance()
     }
     if (_validationEnabled)
         LOG_INFO(Graphics, "Vulkan: validation layer enabled ({})", kValidationLayer);
+    else if (_debugUtilsEnabled)
+        LOG_INFO(Graphics, "Vulkan: debug utils enabled for object naming");
     return true;
 }
 
@@ -502,6 +516,10 @@ bool EngineVK::CreateDevice()
 
     vkGetDeviceQueue(_device, _graphicsQueueFamily, 0, &_graphicsQueue);
     vkGetDeviceQueue(_device, _presentQueueFamily, 0, &_presentQueue);
+    SetObjectName(VK_OBJECT_TYPE_DEVICE, VulkanObjectHandle(_device), "PoseidonVK Device");
+    SetObjectName(VK_OBJECT_TYPE_QUEUE, VulkanObjectHandle(_graphicsQueue), "PoseidonVK Graphics Queue");
+    if (_presentQueue != _graphicsQueue)
+        SetObjectName(VK_OBJECT_TYPE_QUEUE, VulkanObjectHandle(_presentQueue), "PoseidonVK Present Queue");
     return true;
 }
 
@@ -518,6 +536,7 @@ bool EngineVK::CreateCommandPool()
         LOG_ERROR(Graphics, "Vulkan: vkCreateCommandPool failed: {}", VkResultName(result));
         return false;
     }
+    SetObjectName(VK_OBJECT_TYPE_COMMAND_POOL, VulkanObjectHandle(_commandPool), "PoseidonVK Command Pool");
     return true;
 }
 
@@ -586,6 +605,7 @@ bool EngineVK::CreateSwapchain()
         LOG_ERROR(Graphics, "Vulkan: vkCreateSwapchainKHR failed: {}", VkResultName(result));
         return false;
     }
+    SetObjectName(VK_OBJECT_TYPE_SWAPCHAIN_KHR, VulkanObjectHandle(_swapchain), "PoseidonVK Swapchain");
 
     _swapchainFormat = surfaceFormat.format;
     _swapchainExtent = extent;
@@ -595,6 +615,11 @@ bool EngineVK::CreateSwapchain()
     _swapchainImages.resize(actualImageCount);
     vkGetSwapchainImagesKHR(_device, _swapchain, &actualImageCount, _swapchainImages.data());
     _swapchainImageLayouts.assign(actualImageCount, VK_IMAGE_LAYOUT_UNDEFINED);
+    for (uint32_t i = 0; i < actualImageCount; ++i)
+    {
+        const std::string name = "PoseidonVK Swapchain Image " + std::to_string(i);
+        SetObjectName(VK_OBJECT_TYPE_IMAGE, VulkanObjectHandle(_swapchainImages[i]), name.c_str());
+    }
 
     _commandBuffers.resize(actualImageCount);
     VkCommandBufferAllocateInfo allocInfo{};
@@ -607,6 +632,11 @@ bool EngineVK::CreateSwapchain()
     {
         LOG_ERROR(Graphics, "Vulkan: vkAllocateCommandBuffers failed: {}", VkResultName(result));
         return false;
+    }
+    for (uint32_t i = 0; i < actualImageCount; ++i)
+    {
+        const std::string name = "PoseidonVK Clear Command Buffer " + std::to_string(i);
+        SetObjectName(VK_OBJECT_TYPE_COMMAND_BUFFER, VulkanObjectHandle(_commandBuffers[i]), name.c_str());
     }
 
     LOG_INFO(Graphics, "Vulkan: swapchain created {}x{} images={} format={}", _swapchainExtent.width,
@@ -628,12 +658,15 @@ bool EngineVK::CreateSyncObjects()
         LOG_ERROR(Graphics, "Vulkan: failed to create image-available semaphore");
         return false;
     }
+    SetObjectName(VK_OBJECT_TYPE_SEMAPHORE, VulkanObjectHandle(_imageAvailable),
+                  "PoseidonVK Image Available Semaphore");
 
     if (!_inFlight && vkCreateFence(_device, &fenceInfo, nullptr, &_inFlight) != VK_SUCCESS)
     {
         LOG_ERROR(Graphics, "Vulkan: failed to create frame fence");
         return false;
     }
+    SetObjectName(VK_OBJECT_TYPE_FENCE, VulkanObjectHandle(_inFlight), "PoseidonVK Frame Fence");
 
     if (_renderFinished.size() == _swapchainImages.size() &&
         std::all_of(_renderFinished.begin(), _renderFinished.end(), [](VkSemaphore semaphore)
@@ -650,15 +683,67 @@ bool EngineVK::CreateSyncObjects()
     _renderFinished.clear();
 
     _renderFinished.resize(_swapchainImages.size(), VK_NULL_HANDLE);
-    for (VkSemaphore& semaphore : _renderFinished)
+    for (std::size_t i = 0; i < _renderFinished.size(); ++i)
     {
+        VkSemaphore& semaphore = _renderFinished[i];
         if (vkCreateSemaphore(_device, &semaphoreInfo, nullptr, &semaphore) != VK_SUCCESS)
         {
             LOG_ERROR(Graphics, "Vulkan: failed to create per-image render semaphore");
             return false;
         }
+        const std::string name = "PoseidonVK Render Finished Semaphore " + std::to_string(i);
+        SetObjectName(VK_OBJECT_TYPE_SEMAPHORE, VulkanObjectHandle(semaphore), name.c_str());
     }
     return true;
+}
+
+void EngineVK::SetObjectName(VkObjectType objectType, uint64_t objectHandle, const char* name) const
+{
+    if (!_debugUtilsEnabled || !_device || objectHandle == 0 || !name)
+        return;
+
+    auto fn = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(
+        vkGetDeviceProcAddr(_device, "vkSetDebugUtilsObjectNameEXT"));
+    if (!fn)
+        return;
+
+    VkDebugUtilsObjectNameInfoEXT nameInfo{};
+    nameInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+    nameInfo.objectType = objectType;
+    nameInfo.objectHandle = objectHandle;
+    nameInfo.pObjectName = name;
+    fn(_device, &nameInfo);
+}
+
+void EngineVK::BeginDebugLabel(VkCommandBuffer commandBuffer, const char* name, float r, float g, float b) const
+{
+    if (!_debugUtilsEnabled || !commandBuffer || !name)
+        return;
+
+    auto fn = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
+        vkGetDeviceProcAddr(_device, "vkCmdBeginDebugUtilsLabelEXT"));
+    if (!fn)
+        return;
+
+    VkDebugUtilsLabelEXT label{};
+    label.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+    label.pLabelName = name;
+    label.color[0] = r;
+    label.color[1] = g;
+    label.color[2] = b;
+    label.color[3] = 1.0f;
+    fn(commandBuffer, &label);
+}
+
+void EngineVK::EndDebugLabel(VkCommandBuffer commandBuffer) const
+{
+    if (!_debugUtilsEnabled || !commandBuffer)
+        return;
+
+    auto fn = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(
+        vkGetDeviceProcAddr(_device, "vkCmdEndDebugUtilsLabelEXT"));
+    if (fn)
+        fn(commandBuffer);
 }
 
 bool EngineVK::RecordClearCommand(uint32_t imageIndex)
@@ -679,6 +764,8 @@ bool EngineVK::RecordClearCommand(uint32_t imageIndex)
         LOG_ERROR(Graphics, "Vulkan: vkBeginCommandBuffer failed: {}", VkResultName(result));
         return false;
     }
+
+    BeginDebugLabel(commandBuffer, "PoseidonVK Clear Present", 0.04f, 0.35f, 0.75f);
 
     VkImageMemoryBarrier toClear{};
     toClear.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -718,6 +805,8 @@ bool EngineVK::RecordClearCommand(uint32_t imageIndex)
     toPresent.dstAccessMask = 0;
     vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
                          nullptr, 0, nullptr, 1, &toPresent);
+
+    EndDebugLabel(commandBuffer);
 
     result = vkEndCommandBuffer(commandBuffer);
     if (result != VK_SUCCESS)

@@ -103,15 +103,17 @@ formats, not as ad hoc conversion steps scattered through renderer code.
 
 ## Current Phase Notes
 
-Phase 0 is the backend-neutral core and observability pass. The closeout note in
-`.agent/POSEIDON_PHASE0_CLOSEOUT.md` records the intended end state. Before
-moving to Phase 1, keep review feedback focused on correctness of resource IDs,
-shader externalization coverage, frame stats, and GL33 parity.
+Phase 0 is closed out in `.agent/POSEIDON_PHASE0_CLOSEOUT.md`. Phase 1 now has
+a working `PoseidonVK` bootstrap path: the backend registers, `--render vulkan`
+opens an SDL Vulkan window, creates an instance/surface/device/swapchain,
+clears/presents, reports availability, and handles the first resize/swapchain
+lifecycle cases under validation.
 
-The recommended Phase 1 entry slice remains:
+The recommended Phase 2 entry slice is deliberately small:
 
-1. Add a `PoseidonVK` target.
-2. Register a `vulkan` backend in the existing backend factory.
-3. Make `--render vulkan` report availability clearly.
-4. Open a window, clear to a known color, present, resize, and shut down cleanly
-   under validation.
+1. Keep GL33 as the reference renderer and continue manual GL33 smoke tests.
+2. Add Vulkan diagnostics that make RenderDoc/validation captures readable.
+3. Introduce backend-neutral frame/camera constants without leaking Vulkan
+   handles into shared `engine/Poseidon` contracts.
+4. Render the first validation-friendly Vulkan primitive from those constants.
+5. Only then start uploading real terrain/model/HUD resources.

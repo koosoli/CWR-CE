@@ -77,6 +77,8 @@ smoke-testable.
 
 ### Phase 2 - Vulkan Raster Parity
 
+- [x] Add validation/RenderDoc-friendly names and labels to Vulkan bootstrap
+  objects and the clear-present command path.
 - [ ] Feed camera, projection, fog, lighting, and per-draw constants into Vulkan.
 - [ ] Upload static and dynamic mesh buffers through backend-owned resources.
 - [ ] Implement texture creation, sampler state, mip use, and fallback behavior.
