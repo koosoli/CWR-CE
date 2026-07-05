@@ -42,7 +42,7 @@ TEST_CASE("Vulkan frame constants match std140 descriptor layout", "[vulkan][fra
 {
     using Poseidon::vk::FrameConstantsVK;
 
-    STATIC_REQUIRE(sizeof(GfxMatrix) == 64);
+    STATIC_REQUIRE(sizeof(Poseidon::GfxMatrix) == 64);
     STATIC_REQUIRE(offsetof(FrameConstantsVK, view) == 0);
     STATIC_REQUIRE(offsetof(FrameConstantsVK, projection) == 64);
     STATIC_REQUIRE(offsetof(FrameConstantsVK, viewport) == 128);

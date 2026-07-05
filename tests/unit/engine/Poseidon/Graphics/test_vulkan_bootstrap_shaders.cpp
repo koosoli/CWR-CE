@@ -110,6 +110,13 @@ TEST_CASE("Vulkan bootstrap push constants match shader contract", "[vulkan][sha
     CHECK(vertexSource.find("layout(push_constant) uniform BootstrapConstants") != std::string::npos);
     CHECK(vertexSource.find("vec4 viewport;") != std::string::npos);
     CHECK(vertexSource.find("vec4 clearColor;") != std::string::npos);
+    CHECK(vertexSource.find("layout(set = 0, binding = 0, std140) uniform FrameConstants") != std::string::npos);
+    CHECK(vertexSource.find("mat4 view;") != std::string::npos);
+    CHECK(vertexSource.find("mat4 projection;") != std::string::npos);
+    CHECK(vertexSource.find("vec4 clipPlanes;") != std::string::npos);
+    CHECK(vertexSource.find("vec4 worldRect;") != std::string::npos);
+    CHECK(vertexSource.find("vec4 fogParams;") != std::string::npos);
+    CHECK(vertexSource.find("vec4 fogColor;") != std::string::npos);
     CHECK(fragmentSource.find("layout(push_constant) uniform BootstrapConstants") != std::string::npos);
     CHECK(fragmentSource.find("vec4 viewport;") != std::string::npos);
     CHECK(fragmentSource.find("vec4 clearColor;") != std::string::npos);
