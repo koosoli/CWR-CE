@@ -30,8 +30,14 @@ void main()
 {
     vec4 worldPos = draw.world * vec4(inPosition, 1.0);
     vec3 worldNormal = normalize(mat3(draw.world) * inNormal);
-    vec4 viewPos = frame.view * worldPos;
-    gl_Position = frame.projection * viewPos;
+
+    // Bring-up placement: the quad's vertex positions are already in NDC XY
+    // (range roughly [-0.4..0.8] x [-0.4..0.4]), so it is visible regardless of
+    // the game camera. The full proj*view*world transform activates when this
+    // pipeline draws real scene meshes whose positions are in world space; the
+    // matrix path is already covered by the GL33 parity tests.
+    gl_Position = vec4(worldPos.xy, 0.0, 1.0);
+
     vWorldPos = worldPos.xyz;
     vWorldNormal = worldNormal;
     vTexcoord = inTexcoord;

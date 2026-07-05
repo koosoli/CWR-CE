@@ -1379,8 +1379,10 @@ bool EngineVK::CreateScenePipeline()
     viewportState.scissorCount = 1;
     viewportState.pScissors = &scissor;
 
+    // Cull disabled for bring-up so winding mistakes never hide the quad; the
+    // real scene pipeline will set Back/CW once winding matches the mesh loader.
     VkPipelineRasterizationStateCreateInfo rasterizer =
-        vk::BuildRasterizationState(render::CullMode::Back, render::FrontFaceMode::CW);
+        vk::BuildRasterizationState(render::CullMode::None, render::FrontFaceMode::CW);
 
     VkPipelineMultisampleStateCreateInfo multisampling{};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
