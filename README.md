@@ -107,10 +107,16 @@ smoke-testable.
   descriptor set.
 - [x] Upload bootstrap vertex and index buffers through the Vulkan buffer
   helper and draw the primitive with `vkCmdDrawIndexed`.
-- [ ] Feed camera, projection, fog, lighting, and per-draw constants into Vulkan.
+- [x] Upload frame lighting state and per-draw constants into Vulkan-owned
+  buffers and descriptors.
+- [x] Add tested render-pass descriptor to Vulkan raster, depth, and blend
+  state translation helpers.
+- [ ] Use camera, projection, fog, lighting, and per-draw constants in real
+  Vulkan scene shaders.
 - [ ] Upload static and dynamic mesh buffers through backend-owned resources.
 - [ ] Implement texture creation, sampler state, mip use, and fallback behavior.
-- [ ] Build pipeline state from the existing render-pass descriptors.
+- [ ] Build complete Vulkan scene pipeline state from the existing render-pass
+  descriptors.
 - [ ] Render terrain, models, sky, water, cockpit, HUD, text, and shadow passes.
 - [ ] Add screenshot or frame-observation checks to compare Vulkan against GL33.
 

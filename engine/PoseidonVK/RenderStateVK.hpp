@@ -32,6 +32,18 @@ inline VkFrontFace ToVkFrontFace(render::FrontFaceMode mode) noexcept
     return VK_FRONT_FACE_CLOCKWISE;
 }
 
+inline VkPipelineRasterizationStateCreateInfo BuildRasterizationState(
+    render::CullMode cull, render::FrontFaceMode frontFace) noexcept
+{
+    VkPipelineRasterizationStateCreateInfo state{};
+    state.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    state.polygonMode = VK_POLYGON_MODE_FILL;
+    state.cullMode = ToVkCullMode(cull);
+    state.frontFace = ToVkFrontFace(frontFace);
+    state.lineWidth = 1.0f;
+    return state;
+}
+
 inline VkPipelineDepthStencilStateCreateInfo BuildDepthStencilState(render::DepthMode mode) noexcept
 {
     VkPipelineDepthStencilStateCreateInfo state{};

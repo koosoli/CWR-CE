@@ -11,6 +11,15 @@ TEST_CASE("Vulkan render state maps cull and winding descriptors", "[vulkan][ren
     CHECK(Poseidon::vk::ToVkFrontFace(Poseidon::render::FrontFaceMode::CW) == VK_FRONT_FACE_CLOCKWISE);
     CHECK(Poseidon::vk::ToVkFrontFace(Poseidon::render::FrontFaceMode::CCW) ==
           VK_FRONT_FACE_COUNTER_CLOCKWISE);
+
+    const VkPipelineRasterizationStateCreateInfo raster =
+        Poseidon::vk::BuildRasterizationState(Poseidon::render::CullMode::None,
+                                              Poseidon::render::FrontFaceMode::CW);
+    CHECK(raster.sType == VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO);
+    CHECK(raster.polygonMode == VK_POLYGON_MODE_FILL);
+    CHECK(raster.cullMode == VK_CULL_MODE_NONE);
+    CHECK(raster.frontFace == VK_FRONT_FACE_CLOCKWISE);
+    CHECK(raster.lineWidth == 1.0f);
 }
 
 TEST_CASE("Vulkan render state maps depth descriptors", "[vulkan][render-state]")
