@@ -11,7 +11,12 @@ add_library(PoseidonVK STATIC
     ${POSEIDON_VK_HEADERS}
 )
 
-target_link_libraries(PoseidonVK PUBLIC Poseidon)
+find_package(Vulkan REQUIRED)
+
+target_link_libraries(PoseidonVK PUBLIC
+    Poseidon
+    Vulkan::Vulkan
+)
 
 target_include_directories(PoseidonVK PUBLIC
     ${CMAKE_SOURCE_DIR}/engine

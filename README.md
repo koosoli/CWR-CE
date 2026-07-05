@@ -66,8 +66,8 @@ smoke-testable.
 
 - [x] Add a `PoseidonVK` target.
 - [x] Register a `vulkan` backend in the existing backend factory.
-- [x] Make `--render vulkan` parse cleanly and expose the registered
-  unavailable stub.
+- [x] Make `--render vulkan` parse cleanly and report loader/device availability
+  while renderer creation remains disabled.
 - [ ] Create a Vulkan instance, device, surface, swapchain, and debug messenger.
 - [ ] Open a window, clear to a known color, present, resize, and shut down
   cleanly under validation layers.

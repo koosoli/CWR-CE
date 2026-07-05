@@ -46,8 +46,9 @@ after changing CMake targets, moving headers, externalizing shaders, changing
 shared render contracts, or touching backend lifecycle code.
 
 For local manual smoke tests in this workspace, prefer building only the
-`PoseidonGameDemo` target and launching `PoseidonGameDemo.exe`. Do not build the
-full `PoseidonGame` executable unless the user explicitly asks for it.
+`PoseidonGameDemo` target in `build/codex-vk-dbg` and launching that
+`PoseidonGameDemo.exe`. Do not build the full `PoseidonGame` executable unless
+the user explicitly asks for it.
 
 When a functional milestone is reached, ask for or perform a manual GL33 smoke
 test with the real executable and original game assets. Give a short checklist

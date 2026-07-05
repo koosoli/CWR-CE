@@ -1533,6 +1533,7 @@ Engine* GameApplication::CreateGraphicsEngine(const GraphicsEngineParams& params
     Engine* engine = GraphicsEngineFactory::Create(renderBackend, params);
     if (!engine && !renderBackend.empty() && _stricmp(renderBackend.c_str(), "auto") != 0)
     {
+        LOG_WARN(Core, "Requested render backend '{}' is unknown or unavailable; falling back to auto", renderBackend);
         RptF("Unknown or unavailable render backend '%s', defaulting to Auto", renderBackend.c_str());
         engine = GraphicsEngineFactory::Create(GraphicsBackend::Auto, params);
     }
