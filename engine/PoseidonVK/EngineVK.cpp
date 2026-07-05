@@ -1,5 +1,6 @@
 #include <PoseidonVK/EngineVK.hpp>
 
+#include <PoseidonVK/BootstrapPushConstantsVK.hpp>
 #include <Poseidon/Core/Application.hpp>
 #include <Poseidon/Graphics/Shared/WindowPlacement.hpp>
 #include <Poseidon/Foundation/Framework/AppFrame.hpp>
@@ -582,8 +583,15 @@ bool EngineVK::CreateDevice()
 
 bool EngineVK::CreatePipelineLayout()
 {
+    VkPushConstantRange pushConstants{};
+    pushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstants.offset = 0;
+    pushConstants.size = vk::kBootstrapPushConstantsSize;
+
     VkPipelineLayoutCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    createInfo.pushConstantRangeCount = 1;
+    createInfo.pPushConstantRanges = &pushConstants;
 
     const VkResult result = vkCreatePipelineLayout(_device, &createInfo, nullptr, &_pipelineLayout);
     if (result != VK_SUCCESS)
@@ -1078,7 +1086,19 @@ bool EngineVK::RecordClearCommand(uint32_t imageIndex)
     vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
     if (_bootstrapPipeline)
     {
+        vk::BootstrapPushConstantsVK constants{};
+        constants.viewport[0] = 0.0f;
+        constants.viewport[1] = 0.0f;
+        constants.viewport[2] = static_cast<float>(_swapchainExtent.width);
+        constants.viewport[3] = static_cast<float>(_swapchainExtent.height);
+        constants.clearColor[0] = _clearColor.float32[0];
+        constants.clearColor[1] = _clearColor.float32[1];
+        constants.clearColor[2] = _clearColor.float32[2];
+        constants.clearColor[3] = _clearColor.float32[3];
+
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _bootstrapPipeline);
+        vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, vk::kBootstrapPushConstantsSize, &constants);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
     }
     vkCmdEndRenderPass(commandBuffer);

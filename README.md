@@ -89,6 +89,8 @@ smoke-testable.
   them under Vulkan GLSL rules.
 - [x] Draw a validation-clean bootstrap triangle through the Vulkan render-pass
   path.
+- [x] Lock the Vulkan bootstrap push-constant byte layout to the shader
+  contract with tests.
 - [ ] Feed camera, projection, fog, lighting, and per-draw constants into Vulkan.
 - [ ] Upload static and dynamic mesh buffers through backend-owned resources.
 - [ ] Implement texture creation, sampler state, mip use, and fallback behavior.

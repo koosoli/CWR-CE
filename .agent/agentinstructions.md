@@ -50,9 +50,13 @@ For local manual smoke tests in this workspace, prefer building only the
 `PoseidonGameDemo.exe`. Do not build the full `PoseidonGame` executable unless
 the user explicitly asks for it.
 
-When a functional milestone is reached, ask for or perform a manual GL33 smoke
-test with the real executable and original game assets. Give a short checklist
-of what should be visually checked.
+When a functional milestone is reached, ask for or perform a manual smoke test
+with the real executable and original game assets only when it adds useful
+coverage beyond local `--check` runs. Manual smoke is most valuable after
+runtime-renderer behavior changes, GL33 gameplay-risk changes, swapchain/window
+lifetime changes, asset loading changes, crash fixes, or before a manual commit
+intended for sharing. Routine source-only work, tests, docs, or internal
+plumbing can usually rely on local build/unit/`--check` validation.
 
 When handing a newly compiled `PoseidonGameDemo.exe` to the user for manual
 smoke testing, always tell them what to test for specifically. Name the backend,
@@ -61,10 +65,10 @@ recent change. Avoid vague requests like "please test it"; give a compact
 checklist tied to the code that changed.
 
 For Vulkan bootstrap smoke tests, be explicit about the current renderer stage.
-Until Vulkan raster parity is implemented, `--render vulkan` may show only a
-stable clear-color window while game simulation or audio continues. Do not ask
-the user to expect normal scene rendering from Vulkan until the runtime pipeline,
-mesh, texture, and draw paths have actually landed.
+Until Vulkan raster parity is implemented, `--render vulkan` should show only
+the current bootstrap primitive or clear-color stage while game simulation or
+audio continues. Do not ask the user to expect normal scene rendering from
+Vulkan until the mesh, texture, material, and draw paths have actually landed.
 
 ## Regression-Proof Engineering Guidelines
 
@@ -118,8 +122,9 @@ formats, not as ad hoc conversion steps scattered through renderer code.
 Phase 0 is closed out in `.agent/POSEIDON_PHASE0_CLOSEOUT.md`. Phase 1 now has
 a working `PoseidonVK` bootstrap path: the backend registers, `--render vulkan`
 opens an SDL Vulkan window, creates an instance/surface/device/swapchain,
-clears/presents, reports availability, and handles the first resize/swapchain
-lifecycle cases under validation.
+clears/presents, draws a validation-friendly bootstrap triangle, reports
+availability, and handles the first resize/swapchain lifecycle cases under
+validation.
 
 The recommended Phase 2 entry slice is deliberately small:
 
@@ -127,5 +132,5 @@ The recommended Phase 2 entry slice is deliberately small:
 2. Add Vulkan diagnostics that make RenderDoc/validation captures readable.
 3. Introduce backend-neutral frame/camera constants without leaking Vulkan
    handles into shared `engine/Poseidon` contracts.
-4. Render the first validation-friendly Vulkan primitive from those constants.
+4. Feed the tested frame constants into the Vulkan bootstrap path.
 5. Only then start uploading real terrain/model/HUD resources.

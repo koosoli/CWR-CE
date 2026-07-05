@@ -1,9 +1,12 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <PoseidonVK/BootstrapPushConstantsVK.hpp>
+
 #include <glslang/Public/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
 #include <glslang/SPIRV/GlslangToSpv.h>
 
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -89,4 +92,25 @@ TEST_CASE("Vulkan bootstrap shaders compile under Vulkan GLSL rules", "[vulkan][
     CAPTURE(fragment.info);
     REQUIRE(fragment.success);
     REQUIRE(fragment.spirvWordCount > 0);
+}
+
+TEST_CASE("Vulkan bootstrap push constants match shader contract", "[vulkan][shaders]")
+{
+    using Poseidon::vk::BootstrapPushConstantsVK;
+
+    STATIC_REQUIRE(offsetof(BootstrapPushConstantsVK, viewport) == 0);
+    STATIC_REQUIRE(offsetof(BootstrapPushConstantsVK, clearColor) == 16);
+    STATIC_REQUIRE(sizeof(BootstrapPushConstantsVK) == 32);
+    STATIC_REQUIRE(Poseidon::vk::kBootstrapPushConstantsSize == sizeof(BootstrapPushConstantsVK));
+
+    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
+    const std::string vertexSource = ReadTextFile(shaderDir / "bootstrap_triangle.vert.glsl");
+    const std::string fragmentSource = ReadTextFile(shaderDir / "bootstrap_triangle.frag.glsl");
+
+    CHECK(vertexSource.find("layout(push_constant) uniform BootstrapConstants") != std::string::npos);
+    CHECK(vertexSource.find("vec4 viewport;") != std::string::npos);
+    CHECK(vertexSource.find("vec4 clearColor;") != std::string::npos);
+    CHECK(fragmentSource.find("layout(push_constant) uniform BootstrapConstants") != std::string::npos);
+    CHECK(fragmentSource.find("vec4 viewport;") != std::string::npos);
+    CHECK(fragmentSource.find("vec4 clearColor;") != std::string::npos);
 }
