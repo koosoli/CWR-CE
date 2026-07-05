@@ -3,6 +3,7 @@
 #include <PoseidonVK/BufferVK.hpp>
 #include <PoseidonVK/DrawConstantsVK.hpp>
 #include <PoseidonVK/FrameConstantsVK.hpp>
+#include <PoseidonVK/ScenePushConstantsVK.hpp>
 #include <Poseidon/Graphics/Dummy/EngineDummy.hpp>
 #include <Poseidon/Graphics/Shared/WindowMode.hpp>
 #include <vulkan/vulkan.h>
@@ -56,13 +57,17 @@ class EngineVK : public EngineDummy
     bool CreateFrameConstantsBuffer();
     bool CreateBootstrapVertexBuffer();
     bool CreateBootstrapIndexBuffer();
+    bool CreateSceneVertexBuffer();
+    bool CreateSceneIndexBuffer();
     bool EnsureDrawConstantsBufferCapacity(std::size_t drawCount);
     bool CreateFrameDescriptorLayout();
     bool CreateFrameDescriptorSet();
     void UpdateFrameDescriptorSet();
     bool CreatePipelineLayout();
+    bool CreateScenePipelineLayout();
     bool CreateSwapchain();
     bool CreateBootstrapPipeline();
+    bool CreateScenePipeline();
     bool CreateCommandPool();
     bool CreateSyncObjects();
     bool RecordBootstrapCommand(uint32_t imageIndex);
@@ -76,6 +81,9 @@ class EngineVK : public EngineDummy
     void DestroyDrawConstantsBuffer();
     void DestroyBootstrapVertexBuffer();
     void DestroyBootstrapIndexBuffer();
+    void DestroySceneVertexBuffer();
+    void DestroySceneIndexBuffer();
+    void DestroyScenePipelineLayout();
     void DestroySwapchain();
     bool RecreateSwapchain();
     void PresentBootstrapFrame();
@@ -94,11 +102,15 @@ class EngineVK : public EngineDummy
     vk::BufferVK _drawConstantsBuffer;
     vk::BufferVK _bootstrapVertexBuffer;
     vk::BufferVK _bootstrapIndexBuffer;
+    vk::BufferVK _sceneVertexBuffer;
+    vk::BufferVK _sceneIndexBuffer;
     VkDescriptorSetLayout _frameDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool _descriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet _frameDescriptorSet = VK_NULL_HANDLE;
     VkPipelineLayout _pipelineLayout = VK_NULL_HANDLE;
+    VkPipelineLayout _scenePipelineLayout = VK_NULL_HANDLE;
     VkPipeline _bootstrapPipeline = VK_NULL_HANDLE;
+    VkPipeline _scenePipeline = VK_NULL_HANDLE;
     VkSwapchainKHR _swapchain = VK_NULL_HANDLE;
     VkFormat _swapchainFormat = VK_FORMAT_UNDEFINED;
     VkExtent2D _swapchainExtent{};

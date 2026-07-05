@@ -5,6 +5,8 @@
 #include <PoseidonVK/DescriptorBindingsVK.hpp>
 #include <PoseidonVK/DrawConstantsVK.hpp>
 #include <PoseidonVK/RenderStateVK.hpp>
+#include <PoseidonVK/ScenePushConstantsVK.hpp>
+#include <PoseidonVK/VertexLayoutVK.hpp>
 #include <Poseidon/Core/Application.hpp>
 #include <Poseidon/Graphics/Shared/WindowPlacement.hpp>
 #include <Poseidon/Foundation/Framework/AppFrame.hpp>
@@ -63,6 +65,37 @@ constexpr BootstrapVertex kBootstrapTriangleVertices[] = {
 constexpr uint16_t kBootstrapTriangleIndices[] = {0, 1, 2};
 constexpr uint32_t kBootstrapTriangleIndexCount =
     static_cast<uint32_t>(sizeof(kBootstrapTriangleIndices) / sizeof(kBootstrapTriangleIndices[0]));
+
+constexpr const char kSceneVertexShader[] =
+#include <PoseidonVK/Shaders/scene.vert.glsl.hpp>
+    ;
+constexpr const char kSceneFragmentShader[] =
+#include <PoseidonVK/Shaders/scene.frag.glsl.hpp>
+    ;
+
+// Scene mesh vertex matching the SVertex contract (pos, norm, uv) consumed by
+// vsTransform / scene.vert. Laid out so vk::MakeSceneVertex*Description()
+// describes it exactly. A single quad offset to the right of center so the
+// lit scene draw is visually distinct from the bootstrap triangle on the left.
+struct SceneVertex
+{
+    float position[3];
+    float normal[3];
+    float texcoord[2];
+};
+
+static_assert(sizeof(SceneVertex) == vk::kSceneVertexStride);
+
+constexpr SceneVertex kSceneQuadVertices[] = {
+    {{0.10f, -0.35f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 0.0f}},
+    {{0.75f, -0.35f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+    {{0.75f, 0.35f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
+    {{0.10f, 0.35f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+};
+
+constexpr uint16_t kSceneQuadIndices[] = {0, 1, 2, 0, 2, 3};
+constexpr uint32_t kSceneQuadIndexCount =
+    static_cast<uint32_t>(sizeof(kSceneQuadIndices) / sizeof(kSceneQuadIndices[0]));
 
 bool HasInstanceExtension(const char* requiredExtension)
 {
@@ -385,9 +418,11 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
 
     if (!CreateInstance() || !CreateDebugMessenger() || !CreateSurface() || !PickPhysicalDevice() || !CreateDevice() ||
         !CreateFrameConstantsBuffer() || !CreateBootstrapVertexBuffer() || !CreateBootstrapIndexBuffer() ||
+        !CreateSceneVertexBuffer() || !CreateSceneIndexBuffer() ||
         !EnsureDrawConstantsBufferCapacity(1) || !CreateFrameDescriptorLayout() || !CreatePipelineLayout() ||
-        !CreateFrameDescriptorSet() ||
-        !CreateCommandPool() || !CreateSwapchain() || !CreateBootstrapPipeline() || !CreateSyncObjects())
+        !CreateScenePipelineLayout() || !CreateFrameDescriptorSet() ||
+        !CreateCommandPool() || !CreateSwapchain() || !CreateBootstrapPipeline() || !CreateScenePipeline() ||
+        !CreateSyncObjects())
     {
         Shutdown();
         return false;
@@ -653,6 +688,33 @@ bool EngineVK::CreatePipelineLayout()
     return true;
 }
 
+bool EngineVK::CreateScenePipelineLayout()
+{
+    VkDescriptorSetLayout setLayouts[] = {_frameDescriptorSetLayout};
+
+    VkPushConstantRange pushConstants{};
+    pushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstants.offset = 0;
+    pushConstants.size = vk::kScenePushConstantsSize;
+
+    VkPipelineLayoutCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    createInfo.setLayoutCount = _frameDescriptorSetLayout ? 1u : 0u;
+    createInfo.pSetLayouts = _frameDescriptorSetLayout ? setLayouts : nullptr;
+    createInfo.pushConstantRangeCount = 1;
+    createInfo.pPushConstantRanges = &pushConstants;
+
+    const VkResult result = vkCreatePipelineLayout(_device, &createInfo, nullptr, &_scenePipelineLayout);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: scene pipeline layout creation failed: {}", VkResultName(result));
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT, VulkanObjectHandle(_scenePipelineLayout),
+                  "PoseidonVK Scene Pipeline Layout");
+    return true;
+}
+
 bool EngineVK::CreateFrameConstantsBuffer()
 {
     const VkResult result = vk::CreateHostVisibleBuffer(_physicalDevice, _device, sizeof(vk::FrameConstantsVK),
@@ -706,6 +768,44 @@ bool EngineVK::CreateBootstrapIndexBuffer()
                   "PoseidonVK Bootstrap Triangle Index Buffer");
     SetObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, VulkanObjectHandle(_bootstrapIndexBuffer.memory),
                   "PoseidonVK Bootstrap Triangle Index Memory");
+    return true;
+}
+
+bool EngineVK::CreateSceneVertexBuffer()
+{
+    const VkResult result =
+        vk::CreateHostVisibleBuffer(_physicalDevice, _device, sizeof(kSceneQuadVertices),
+                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, _sceneVertexBuffer);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: scene vertex buffer creation failed: {}", VkResultName(result));
+        return false;
+    }
+
+    vk::UploadMappedBuffer(_sceneVertexBuffer, kSceneQuadVertices, sizeof(kSceneQuadVertices));
+    SetObjectName(VK_OBJECT_TYPE_BUFFER, VulkanObjectHandle(_sceneVertexBuffer.buffer),
+                  "PoseidonVK Scene Quad Vertex Buffer");
+    SetObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, VulkanObjectHandle(_sceneVertexBuffer.memory),
+                  "PoseidonVK Scene Quad Vertex Memory");
+    return true;
+}
+
+bool EngineVK::CreateSceneIndexBuffer()
+{
+    const VkResult result =
+        vk::CreateHostVisibleBuffer(_physicalDevice, _device, sizeof(kSceneQuadIndices),
+                                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT, _sceneIndexBuffer);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: scene index buffer creation failed: {}", VkResultName(result));
+        return false;
+    }
+
+    vk::UploadMappedBuffer(_sceneIndexBuffer, kSceneQuadIndices, sizeof(kSceneQuadIndices));
+    SetObjectName(VK_OBJECT_TYPE_BUFFER, VulkanObjectHandle(_sceneIndexBuffer.buffer),
+                  "PoseidonVK Scene Quad Index Buffer");
+    SetObjectName(VK_OBJECT_TYPE_DEVICE_MEMORY, VulkanObjectHandle(_sceneIndexBuffer.memory),
+                  "PoseidonVK Scene Quad Index Memory");
     return true;
 }
 
@@ -1191,6 +1291,140 @@ bool EngineVK::CreateBootstrapPipeline()
     return true;
 }
 
+bool EngineVK::CreateScenePipeline()
+{
+    std::vector<uint32_t> vertexSpirv;
+    std::vector<uint32_t> fragmentSpirv;
+    std::string error;
+    if (!CompileBootstrapShader(kSceneVertexShader, EShLangVertex, vertexSpirv, error))
+    {
+        LOG_ERROR(Graphics, "Vulkan: scene vertex shader compile failed: {}", error);
+        return false;
+    }
+    if (!CompileBootstrapShader(kSceneFragmentShader, EShLangFragment, fragmentSpirv, error))
+    {
+        LOG_ERROR(Graphics, "Vulkan: scene fragment shader compile failed: {}", error);
+        return false;
+    }
+
+    auto createShaderModule = [&](const std::vector<uint32_t>& spirv, const char* name, VkShaderModule& module)
+    {
+        VkShaderModuleCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createInfo.codeSize = spirv.size() * sizeof(uint32_t);
+        createInfo.pCode = spirv.data();
+        const VkResult result = vkCreateShaderModule(_device, &createInfo, nullptr, &module);
+        if (result != VK_SUCCESS)
+        {
+            LOG_ERROR(Graphics, "Vulkan: vkCreateShaderModule failed for {}: {}", name, VkResultName(result));
+            return false;
+        }
+        SetObjectName(VK_OBJECT_TYPE_SHADER_MODULE, VulkanObjectHandle(module), name);
+        return true;
+    };
+
+    VkShaderModule vertexModule = VK_NULL_HANDLE;
+    VkShaderModule fragmentModule = VK_NULL_HANDLE;
+    if (!createShaderModule(vertexSpirv, "PoseidonVK Scene Vertex Shader", vertexModule) ||
+        !createShaderModule(fragmentSpirv, "PoseidonVK Scene Fragment Shader", fragmentModule))
+    {
+        if (vertexModule)
+            vkDestroyShaderModule(_device, vertexModule, nullptr);
+        if (fragmentModule)
+            vkDestroyShaderModule(_device, fragmentModule, nullptr);
+        return false;
+    }
+
+    VkPipelineShaderStageCreateInfo shaderStages[2]{};
+    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    shaderStages[0].module = vertexModule;
+    shaderStages[0].pName = "main";
+    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    shaderStages[1].module = fragmentModule;
+    shaderStages[1].pName = "main";
+
+    const VkVertexInputBindingDescription vertexBinding = vk::MakeSceneVertexBindingDescription();
+    const std::array<VkVertexInputAttributeDescription, vk::kSceneVertexAttributeCount> vertexAttributes =
+        vk::MakeSceneVertexAttributeDescriptions();
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &vertexBinding;
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttributes.size());
+    vertexInput.pVertexAttributeDescriptions = vertexAttributes.data();
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = static_cast<float>(_swapchainExtent.width);
+    viewport.height = static_cast<float>(_swapchainExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = _swapchainExtent;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer =
+        vk::BuildRasterizationState(render::CullMode::Back, render::FrontFaceMode::CW);
+
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment =
+        vk::BuildColorBlendAttachmentState(render::BlendMode::Opaque);
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    // Depth state omitted: the bootstrap render pass has no depth attachment
+    // yet. BuildDepthStencilState is ready to supply it once one is added.
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.layout = _scenePipelineLayout;
+    pipelineInfo.renderPass = _renderPass;
+    pipelineInfo.subpass = 0;
+
+    const VkResult result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                                      &_scenePipeline);
+    vkDestroyShaderModule(_device, fragmentModule, nullptr);
+    vkDestroyShaderModule(_device, vertexModule, nullptr);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: scene pipeline creation failed: {}", VkResultName(result));
+        return false;
+    }
+
+    SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_scenePipeline), "PoseidonVK Scene Quad Pipeline");
+    LOG_INFO(Graphics, "Vulkan: scene pipeline created");
+    return true;
+}
+
 bool EngineVK::CreateSyncObjects()
 {
     VkSemaphoreCreateInfo semaphoreInfo{};
@@ -1386,6 +1620,28 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                            0, vk::kBootstrapPushConstantsSize, &constants);
         vkCmdDrawIndexed(commandBuffer, kBootstrapTriangleIndexCount, 1, 0, 0, 0);
     }
+    if (_scenePipeline)
+    {
+        const vk::ScenePushConstantsVK sceneConstants = vk::BuildIdentityScenePushConstants();
+
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipeline);
+        if (_sceneVertexBuffer.buffer)
+        {
+            VkBuffer vertexBuffers[] = {_sceneVertexBuffer.buffer};
+            VkDeviceSize offsets[] = {0};
+            vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+        }
+        if (_sceneIndexBuffer.buffer)
+            vkCmdBindIndexBuffer(commandBuffer, _sceneIndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT16);
+        if (_frameDescriptorSet)
+        {
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipelineLayout, 0, 1,
+                                    &_frameDescriptorSet, 0, nullptr);
+        }
+        vkCmdPushConstants(commandBuffer, _scenePipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                           vk::kScenePushConstantsSize, &sceneConstants);
+        vkCmdDrawIndexed(commandBuffer, kSceneQuadIndexCount, 1, 0, 0, 0);
+    }
     vkCmdEndRenderPass(commandBuffer);
 
     EndDebugLabel(commandBuffer);
@@ -1401,6 +1657,11 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
 
 void EngineVK::DestroySwapchain()
 {
+    if (_scenePipeline)
+    {
+        vkDestroyPipeline(_device, _scenePipeline, nullptr);
+        _scenePipeline = VK_NULL_HANDLE;
+    }
     if (_bootstrapPipeline)
     {
         vkDestroyPipeline(_device, _bootstrapPipeline, nullptr);
@@ -1471,6 +1732,25 @@ void EngineVK::DestroyBootstrapIndexBuffer()
     vk::DestroyBuffer(_device, _bootstrapIndexBuffer);
 }
 
+void EngineVK::DestroySceneVertexBuffer()
+{
+    vk::DestroyBuffer(_device, _sceneVertexBuffer);
+}
+
+void EngineVK::DestroySceneIndexBuffer()
+{
+    vk::DestroyBuffer(_device, _sceneIndexBuffer);
+}
+
+void EngineVK::DestroyScenePipelineLayout()
+{
+    if (_scenePipelineLayout)
+    {
+        vkDestroyPipelineLayout(_device, _scenePipelineLayout, nullptr);
+        _scenePipelineLayout = VK_NULL_HANDLE;
+    }
+}
+
 bool EngineVK::RecreateSwapchain()
 {
     if (!_device)
@@ -1478,7 +1758,8 @@ bool EngineVK::RecreateSwapchain()
 
     vkDeviceWaitIdle(_device);
     DestroySwapchain();
-    const bool recreated = CreateSwapchain() && CreateBootstrapPipeline() && CreateSyncObjects();
+    const bool recreated =
+        CreateSwapchain() && CreateBootstrapPipeline() && CreateScenePipeline() && CreateSyncObjects();
     _swapchainDirty = !recreated;
     return recreated;
 }
@@ -1583,11 +1864,14 @@ void EngineVK::Shutdown()
             vkDestroyPipelineLayout(_device, _pipelineLayout, nullptr);
             _pipelineLayout = VK_NULL_HANDLE;
         }
+        DestroyScenePipelineLayout();
         DestroyFrameDescriptorResources();
         DestroyFrameConstantsBuffer();
         DestroyDrawConstantsBuffer();
         DestroyBootstrapVertexBuffer();
         DestroyBootstrapIndexBuffer();
+        DestroySceneVertexBuffer();
+        DestroySceneIndexBuffer();
         vkDestroyDevice(_device, nullptr);
         _device = VK_NULL_HANDLE;
     }

@@ -11,12 +11,15 @@ set(POSEIDON_VK_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/FrameConstantsVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/GraphicsBackendVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/RenderStateVK.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ScenePushConstantsVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/VertexLayoutVK.hpp
 )
 
 set(POSEIDON_VK_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/bootstrap_triangle.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/bootstrap_triangle.frag.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/scene.vert.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/scene.frag.glsl
 )
 
 set(POSEIDON_VK_GENERATED_SHADER_HEADERS)

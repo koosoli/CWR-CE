@@ -111,8 +111,11 @@ smoke-testable.
   buffers and descriptors.
 - [x] Add tested render-pass descriptor to Vulkan raster, depth, and blend
   state translation helpers.
-- [ ] Use camera, projection, fog, lighting, and per-draw constants in real
-  Vulkan scene shaders.
+- [x] Add the first Vulkan scene shaders and a scene pipeline that consume
+  camera, projection, and per-draw world constants through a tested push
+  constant, and draw a lit mesh through the descriptor-set path.
+- [ ] Drive fog and lighting from the uploaded frame constants in the scene
+  shaders (currently a fixed directional light).
 - [ ] Upload static and dynamic mesh buffers through backend-owned resources.
 - [ ] Implement texture creation, sampler state, mip use, and fallback behavior.
 - [ ] Build complete Vulkan scene pipeline state from the existing render-pass
