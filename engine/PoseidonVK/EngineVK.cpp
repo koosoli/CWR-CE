@@ -1796,13 +1796,11 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     }
     if (_scenePipeline)
     {
-        // The vertex shader can read indexed per-draw world matrices from the
-        // DrawConstants SSBO (binding 1), but the bring-up quad lives in NDC,
-        // so it must use the identity fallback to stay visible. useDrawConstants
-        // stays false until this path binds real world-space mesh buffers; the
-        // indexed SSBO read path itself is implemented and compile-checked.
-        const vk::ScenePushConstantsVK sceneConstants = vk::BuildIdentityScenePushConstants();
-
+        // Bind the scene pipeline, frame descriptor set, and the bring-up quad
+        // buffers once. Until real per-mesh backend buffers are uploaded, every
+        // scene draw command shares these buffers; each command still pushes its
+        // own per-draw drawIndex so the vertex shader reads the correct world
+        // matrix from the DrawConstants SSBO.
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipeline);
         if (_sceneVertexBuffer.buffer)
         {
@@ -1817,9 +1815,37 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipelineLayout, 0, 1,
                                     &_frameDescriptorSet, 0, nullptr);
         }
-        vkCmdPushConstants(commandBuffer, _scenePipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                           vk::kScenePushConstantsSize, &sceneConstants);
-        vkCmdDrawIndexed(commandBuffer, kSceneQuadIndexCount, 1, 0, 0, 0);
+
+        if (!_lastSceneDrawCommands.empty())
+        {
+            for (const vk::SceneDrawCommandVK& command : _lastSceneDrawCommands)
+            {
+                const vk::ScenePushConstantsVK constants = vk::BuildScenePushConstants(
+                    vk::FrameConstantsVK{}.projection, true, command.drawIndex);
+                vkCmdPushConstants(commandBuffer, _scenePipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                   vk::kScenePushConstantsSize, &constants);
+                // firstIndex is an index-count offset; convert to the byte offset
+                // vkCmdDrawIndexed expects via the index type (uint16 = 2 bytes).
+                // The bring-up quad only has kSceneQuadIndexCount indices, so clamp
+                // the draw to stay within bounds until real mesh buffers are bound.
+                const uint32_t firstIndex = command.firstIndex;
+                const uint32_t indexCount =
+                    (firstIndex + command.indexCount <= kSceneQuadIndexCount)
+                        ? command.indexCount
+                        : (firstIndex < kSceneQuadIndexCount ? kSceneQuadIndexCount - firstIndex : 0);
+                if (indexCount > 0)
+                    vkCmdDrawIndexed(commandBuffer, indexCount, 1, firstIndex, 0, 0);
+            }
+        }
+        else
+        {
+            // No frame plan yet: draw the bring-up quad with identity world so the
+            // scene pipeline produces visible output before SubmitFramePlan arrives.
+            const vk::ScenePushConstantsVK sceneConstants = vk::BuildIdentityScenePushConstants();
+            vkCmdPushConstants(commandBuffer, _scenePipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                               vk::kScenePushConstantsSize, &sceneConstants);
+            vkCmdDrawIndexed(commandBuffer, kSceneQuadIndexCount, 1, 0, 0, 0);
+        }
     }
     vkCmdEndRenderPass(commandBuffer);
 

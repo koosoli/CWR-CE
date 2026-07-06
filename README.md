@@ -122,6 +122,9 @@ smoke-testable.
   consumption for Vulkan point/spot lighting bring-up.
 - [ ] Refine Vulkan local lighting toward per-object light lists,
   material-scaled colors, and GL33 visual parity.
+- [x] Drive the Vulkan scene draw loop from the backend-neutral frame plan,
+  issuing one indexed draw per recorded command with per-draw SSBO world
+  matrices (bring-up buffers shared until real mesh upload lands).
 - [ ] Upload static and dynamic mesh buffers through backend-owned resources.
 - [ ] Implement texture creation, sampler state, mip use, and fallback behavior.
 - [ ] Build complete Vulkan scene pipeline state from the existing render-pass

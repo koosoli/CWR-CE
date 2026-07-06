@@ -162,6 +162,7 @@ set(POSEIDON_TEST_SOURCES
     Graphics/test_vulkan_bootstrap_shaders.cpp
     Graphics/test_vulkan_descriptor_bindings.cpp
     Graphics/test_vulkan_frame_constants.cpp
+    Graphics/test_vulkan_mesh_registry.cpp
     Graphics/test_vulkan_render_state.cpp
     Graphics/test_vulkan_scene_draw_commands.cpp
     Graphics/test_vulkan_scene_shaders.cpp
