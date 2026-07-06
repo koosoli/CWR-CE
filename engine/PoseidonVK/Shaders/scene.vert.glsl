@@ -7,6 +7,7 @@ layout(location = 2) in vec2 inTexcoord;
 layout(location = 0) out vec3 vWorldPos;
 layout(location = 1) out vec3 vWorldNormal;
 layout(location = 2) out vec2 vTexcoord;
+layout(location = 3) out float vFogFactor;
 
 layout(set = 0, binding = 0, std140) uniform FrameConstants
 {
@@ -79,4 +80,14 @@ void main()
     vWorldPos = worldPos.xyz;
     vWorldNormal = worldNormal;
     vTexcoord = inTexcoord;
+
+    // Fog factor computed vertex-side from the uploaded frame constants, mirroring
+    // the GL33 vsTransform convention: distance is camera-relative (view-space
+    // length), factor = clamp(1 - (dist - start) * invRange). fogParams.w carries
+    // the enabled flag (1.0 = on); when off the factor is forced to 1.0 (no fog).
+    // The fragment shader then mixes toward frame.fogColor by this factor.
+    vec4 viewPos = frame.view * worldPos;
+    float dist = length(viewPos.xyz);
+    float fogFactor = clamp(1.0 - (dist - frame.fogParams.x) * frame.fogParams.z, 0.0, 1.0);
+    vFogFactor = (frame.fogParams.w > 0.5) ? fogFactor : 1.0;
 }

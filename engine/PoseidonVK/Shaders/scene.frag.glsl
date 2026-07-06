@@ -3,6 +3,7 @@
 layout(location = 0) in vec3 vWorldPos;
 layout(location = 1) in vec3 vWorldNormal;
 layout(location = 2) in vec2 vTexcoord;
+layout(location = 3) in float vFogFactor;
 
 layout(location = 0) out vec4 outColor;
 
@@ -32,5 +33,11 @@ void main()
     // UV-driven two-tone color so the smoke test can tell the scene draw apart
     // from the bootstrap triangle and confirm UVs travel through correctly.
     vec3 baseColor = mix(vec3(0.10f, 0.55f, 0.85f), vec3(0.85f, 0.40f, 0.10f), vTexcoord.x);
-    outColor = vec4(baseColor * light, 1.0f);
+    vec3 litColor = baseColor * light;
+
+    // Fog driven from the uploaded frame constants: mix toward frame.fogColor
+    // as distance grows. vFogFactor=1 near (no fog), 0 far (full fog), matching
+    // the GL33 vsTransform/vsFog convention.
+    vec3 fogged = mix(frame.fogColor.rgb, litColor, vFogFactor);
+    outColor = vec4(fogged, 1.0f);
 }

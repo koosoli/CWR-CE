@@ -137,6 +137,25 @@ TEST_CASE("Vulkan DrawConstants SSBO element stride matches the shader struct", 
     STATIC_REQUIRE(offsetof(Poseidon::vk::DrawConstantsVK, world) == 0);
 }
 
+TEST_CASE("Vulkan scene shaders drive fog from the uploaded frame constants", "[vulkan][scene-shaders]")
+{
+    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
+    const std::string vertexSource = ReadTextFile(shaderDir / "scene.vert.glsl");
+    const std::string fragmentSource = ReadTextFile(shaderDir / "scene.frag.glsl");
+
+    // Vertex shader computes the fog factor from fogParams and emits a varying.
+    CHECK(vertexSource.find("layout(location = 3) out float vFogFactor;") != std::string::npos);
+    CHECK(vertexSource.find("frame.fogParams.x") != std::string::npos);
+    CHECK(vertexSource.find("frame.fogParams.z") != std::string::npos);
+    CHECK(vertexSource.find("frame.fogParams.w") != std::string::npos);
+    CHECK(vertexSource.find("vFogFactor =") != std::string::npos);
+
+    // Fragment shader consumes the varying and mixes toward frame.fogColor.
+    CHECK(fragmentSource.find("layout(location = 3) in float vFogFactor;") != std::string::npos);
+    CHECK(fragmentSource.find("frame.fogColor.rgb") != std::string::npos);
+    CHECK(fragmentSource.find("mix(frame.fogColor.rgb, litColor, vFogFactor)") != std::string::npos);
+}
+
 TEST_CASE("Vulkan scene shaders declare the world push constant", "[vulkan][scene-shaders]")
 {
     const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
