@@ -35,6 +35,13 @@ class EngineVK : public EngineDummy
     bool ConsumesRenderFramePlan() const override { return true; }
     void SubmitFramePlan(const render::frame::Frame& frame) override;
     void HandleEvents() override;
+
+    void InitDraw(bool clear = false, PackedColor color = PackedColor(0)) override;
+    VertexBuffer* CreateVertexBuffer(const Shape& src, VBType type) override;
+    void DrawSectionTL(const Shape& sMesh, int beg, int end) override;
+    const std::vector<DrawItem>* GetRecordedDraws() const override { return &_drawItems; }
+    void PrepareTriangleTL(const MipInfo& mip, const render::LegacySpec& spec) override;
+    void PrepareMeshTL(const LightList& lights, const Matrix4& modelToWorld, const render::LegacySpec& spec) override;
     bool IsOpen() const override { return _open; }
     void SetMouseGrab(bool grab) override;
     bool IsMouseGrabbed() const override { return _mouseGrab; }
@@ -155,6 +162,12 @@ class EngineVK : public EngineDummy
     int _bitsPerPixel = 32;
     int _refreshRate = 0;
     WindowMode _windowMode = WindowMode::Windowed;
+
+    std::vector<DrawItem> _drawItems;
+    DrawItem _currentDrawItem;
+    std::uint32_t _lastTexture1ResourceId = 1;
+
+    friend class VertexBufferVK;
 };
 
 } // namespace Poseidon

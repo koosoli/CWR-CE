@@ -1,6 +1,10 @@
 #include <PoseidonVK/EngineVK.hpp>
 
+#include <PoseidonVK/VertexBufferVK.hpp>
 #include <PoseidonVK/BootstrapPushConstantsVK.hpp>
+#include <Poseidon/Graphics/Core/MatrixConversion.hpp>
+#include <Poseidon/World/Scene/Scene.hpp>
+#include <unordered_map>
 #include <PoseidonVK/BufferVK.hpp>
 #include <PoseidonVK/DescriptorBindingsVK.hpp>
 #include <PoseidonVK/DrawConstantsVK.hpp>
@@ -2224,6 +2228,97 @@ void EngineVK::OnResized()
     if (_width <= 0 || _height <= 0)
         return;
     FireResizePostHook(_width, _height);
+}
+
+namespace
+{
+std::uint32_t GetOrCreateTextureResourceId(Texture* tex)
+{
+    if (!tex)
+        return 0;
+
+    static std::unordered_map<Texture*, std::uint32_t> s_texToId;
+    static std::uint32_t s_nextId = 2; // 1 is fallback
+
+    auto it = s_texToId.find(tex);
+    if (it != s_texToId.end())
+        return it->second;
+
+    std::uint32_t id = s_nextId++;
+    s_texToId[tex] = id;
+    return id;
+}
+} // namespace
+
+void EngineVK::InitDraw(bool clear, PackedColor color)
+{
+    Engine::InitDraw(clear, color);
+    _drawItems.clear();
+    _currentDrawItem = DrawItem{};
+}
+
+VertexBuffer* EngineVK::CreateVertexBuffer(const Shape& src, VBType type)
+{
+    auto* buf = new VertexBufferVK;
+    if (buf->Init(*this, src, type))
+        return buf;
+    delete buf;
+    return nullptr;
+}
+
+void EngineVK::DrawSectionTL(const Shape& sMesh, int beg, int end)
+{
+    auto* buf = static_cast<VertexBufferVK*>(sMesh.GetVertexBuffer());
+    if (!buf || buf->_sections.empty())
+        return;
+
+    PoseidonAssert(end > beg);
+    PoseidonAssert(end <= static_cast<int>(buf->_sections.size()));
+
+    const VBSectionInfoVK& siBeg = buf->_sections[beg];
+    const VBSectionInfoVK& siEnd = buf->_sections[end - 1];
+
+    std::uint32_t indexCount = siEnd.end - siBeg.beg;
+    if (indexCount <= 0)
+        return;
+
+    DrawItem item = _currentDrawItem;
+    item.isTLDraw = true;
+    item.sectionBegin = beg;
+    item.sectionEnd = end;
+    item.firstIndex = static_cast<int>(siBeg.beg);
+    item.indexCount = static_cast<int>(indexCount);
+    item.vertexBuffer = buf;
+    item.backendMeshResourceId = buf->GetMeshResourceId();
+    item.backendTexture1ResourceId = _lastTexture1ResourceId;
+    item.passId = SpecToPassId(item.specFlags);
+    _drawItems.push_back(item);
+}
+
+void EngineVK::PrepareTriangleTL(const MipInfo& mip, const Poseidon::render::LegacySpec& spec)
+{
+    _currentDrawItem.backendTextureResourceId = GetOrCreateTextureResourceId(mip._texture);
+    _currentDrawItem.specFlags = spec;
+}
+
+void EngineVK::PrepareMeshTL(const LightList& lights, const Matrix4& modelToWorld, const Poseidon::render::LegacySpec& spec)
+{
+    GfxMatrix worldMatrix;
+    ConvertMatrix(worldMatrix, modelToWorld);
+    
+    // Camera-relative rendering
+    Vector3 camPos = VZero;
+    if (GScene && GScene->GetCamera())
+        camPos = GScene->GetCamera()->Position();
+        
+    worldMatrix._41 -= static_cast<float>(camPos.X());
+    worldMatrix._42 -= static_cast<float>(camPos.Y());
+    worldMatrix._43 -= static_cast<float>(camPos.Z());
+
+    _currentDrawItem = DrawItem{};
+    _currentDrawItem.worldMatrix = worldMatrix;
+    _currentDrawItem.specFlags = spec;
+    _currentDrawItem.bias = GetBias();
 }
 
 } // namespace Poseidon
