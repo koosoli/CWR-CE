@@ -428,6 +428,18 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
         return false;
     }
 
+    // Register the bring-up quad as a real mesh so the scene draw loop resolves
+    // it through the mesh registry. Until real per-object uploads land, every
+    // draw command shares this mesh; the registry path itself is exercised live.
+    constexpr std::uint32_t kBootstrapMeshId = 1;
+    vk::MeshResourcesVK bootstrapMesh;
+    bootstrapMesh.vertexBuffer = _sceneVertexBuffer.buffer;
+    bootstrapMesh.indexBuffer = _sceneIndexBuffer.buffer;
+    bootstrapMesh.vertexCount = static_cast<std::uint32_t>(sizeof(kSceneQuadVertices) / sizeof(kSceneQuadVertices[0]));
+    bootstrapMesh.indexCount = kSceneQuadIndexCount;
+    _meshRegistry.Register(kBootstrapMeshId, bootstrapMesh);
+    _bootstrapMeshId = kBootstrapMeshId;
+
     SDL_GetWindowSizeInPixels(_window, &_width, &_height);
     SDL_StartTextInput(_window);
     SetMouseGrab(true);
@@ -1796,20 +1808,10 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     }
     if (_scenePipeline)
     {
-        // Bind the scene pipeline, frame descriptor set, and the bring-up quad
-        // buffers once. Until real per-mesh backend buffers are uploaded, every
-        // scene draw command shares these buffers; each command still pushes its
-        // own per-draw drawIndex so the vertex shader reads the correct world
-        // matrix from the DrawConstants SSBO.
+        // Bind the scene pipeline and frame descriptor set once; per-command
+        // state (vertex/index buffers + push constants) is bound inside the
+        // loop after resolving each draw's mesh through the registry.
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipeline);
-        if (_sceneVertexBuffer.buffer)
-        {
-            VkBuffer vertexBuffers[] = {_sceneVertexBuffer.buffer};
-            VkDeviceSize offsets[] = {0};
-            vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-        }
-        if (_sceneIndexBuffer.buffer)
-            vkCmdBindIndexBuffer(commandBuffer, _sceneIndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT16);
         if (_frameDescriptorSet)
         {
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipelineLayout, 0, 1,
@@ -1820,19 +1822,38 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         {
             for (const vk::SceneDrawCommandVK& command : _lastSceneDrawCommands)
             {
+                // Resolve the draw's mesh via the registry. Until real per-object
+                // uploads land, most commands resolve to the bring-up quad; the
+                // resolve-and-bind path itself is exercised live against real ids.
+                const vk::MeshResourcesVK* mesh = _meshRegistry.Resolve(command.meshId);
+                if (!mesh || !mesh->IsValid())
+                    mesh = _meshRegistry.Resolve(_bootstrapMeshId);
+                if (!mesh || !mesh->IsValid())
+                    continue;
+
+                if (mesh->vertexBuffer)
+                {
+                    VkBuffer vertexBuffers[] = {mesh->vertexBuffer};
+                    VkDeviceSize offsets[] = {0};
+                    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+                }
+                if (mesh->indexBuffer)
+                    vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+
                 const vk::ScenePushConstantsVK constants = vk::BuildScenePushConstants(
                     vk::FrameConstantsVK{}.projection, true, command.drawIndex);
                 vkCmdPushConstants(commandBuffer, _scenePipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
                                    vk::kScenePushConstantsSize, &constants);
-                // firstIndex is an index-count offset; convert to the byte offset
-                // vkCmdDrawIndexed expects via the index type (uint16 = 2 bytes).
-                // The bring-up quad only has kSceneQuadIndexCount indices, so clamp
-                // the draw to stay within bounds until real mesh buffers are bound.
+
+                // Clamp the draw's index range against the resolved mesh's actual
+                // index count so a stale/oversized firstIndex+indexCount cannot
+                // read past the buffer (uint16 indices).
                 const uint32_t firstIndex = command.firstIndex;
+                const uint32_t meshIndexCount = mesh->indexCount;
                 const uint32_t indexCount =
-                    (firstIndex + command.indexCount <= kSceneQuadIndexCount)
+                    (firstIndex + command.indexCount <= meshIndexCount)
                         ? command.indexCount
-                        : (firstIndex < kSceneQuadIndexCount ? kSceneQuadIndexCount - firstIndex : 0);
+                        : (firstIndex < meshIndexCount ? meshIndexCount - firstIndex : 0);
                 if (indexCount > 0)
                     vkCmdDrawIndexed(commandBuffer, indexCount, 1, firstIndex, 0, 0);
             }
@@ -1841,6 +1862,15 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         {
             // No frame plan yet: draw the bring-up quad with identity world so the
             // scene pipeline produces visible output before SubmitFramePlan arrives.
+            const vk::MeshResourcesVK* mesh = _meshRegistry.Resolve(_bootstrapMeshId);
+            if (mesh && mesh->vertexBuffer)
+            {
+                VkBuffer vertexBuffers[] = {mesh->vertexBuffer};
+                VkDeviceSize offsets[] = {0};
+                vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+            }
+            if (mesh && mesh->indexBuffer)
+                vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT16);
             const vk::ScenePushConstantsVK sceneConstants = vk::BuildIdentityScenePushConstants();
             vkCmdPushConstants(commandBuffer, _scenePipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
                                vk::kScenePushConstantsSize, &sceneConstants);
@@ -2077,6 +2107,10 @@ void EngineVK::Shutdown()
         DestroyDrawConstantsBuffer();
         DestroyBootstrapVertexBuffer();
         DestroyBootstrapIndexBuffer();
+        // Clear the mesh registry before destroying the scene buffers it
+        // references (the registry holds non-owning VkBuffer handles).
+        _meshRegistry.Clear();
+        _bootstrapMeshId = 0;
         DestroySceneVertexBuffer();
         DestroySceneIndexBuffer();
         vkDestroyDevice(_device, nullptr);
