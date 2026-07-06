@@ -10,6 +10,7 @@ set(POSEIDON_VK_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/EngineVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/FrameConstantsVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/GraphicsBackendVK.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/MeshBuilderVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/MeshRegistryVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/RenderStateVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/SceneDrawCommandsVK.hpp
