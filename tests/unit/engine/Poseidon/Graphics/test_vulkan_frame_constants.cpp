@@ -41,6 +41,25 @@ frame::Frame makeFrame()
     inputs.sunDirection[0] = 0.25f;
     inputs.sunDirection[1] = -0.75f;
     inputs.sunDirection[2] = 0.5f;
+    inputs.localLightScale = 0.6f;
+    inputs.localLightCount = 2;
+    inputs.localLights[0].position[0] = 1.0f;
+    inputs.localLights[0].position[1] = 2.0f;
+    inputs.localLights[0].position[2] = 3.0f;
+    inputs.localLights[0].direction[0] = 0.0f;
+    inputs.localLights[0].direction[1] = -1.0f;
+    inputs.localLights[0].direction[2] = 0.0f;
+    inputs.localLights[0].diffuse[0] = 0.7f;
+    inputs.localLights[0].diffuse[1] = 0.6f;
+    inputs.localLights[0].diffuse[2] = 0.5f;
+    inputs.localLights[0].ambient[0] = 0.1f;
+    inputs.localLights[0].ambient[1] = 0.2f;
+    inputs.localLights[0].ambient[2] = 0.3f;
+    inputs.localLights[0].startAtten = 50.0f;
+    inputs.localLights[0].kind = frame::LocalLightKind::Point;
+    inputs.localLights[1].position[0] = 4.0f;
+    inputs.localLights[1].startAtten = 75.0f;
+    inputs.localLights[1].kind = frame::LocalLightKind::Spot;
     inputs.fogStart = 25.0f;
     inputs.fogEnd = 125.0f;
     inputs.fogColorRGBA = 0x336699ccu;
@@ -64,7 +83,11 @@ TEST_CASE("Vulkan frame constants match std140 descriptor layout", "[vulkan][fra
     STATIC_REQUIRE(offsetof(FrameConstantsVK, fogColor) == 256);
     STATIC_REQUIRE(offsetof(FrameConstantsVK, lightingParams) == 272);
     STATIC_REQUIRE(offsetof(FrameConstantsVK, sunDirection) == 288);
-    STATIC_REQUIRE(sizeof(FrameConstantsVK) == 304);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, localLightPosition) == 304);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, localLightDiffuse) == 432);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, localLightAmbient) == 560);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, localLightDirection) == 688);
+    STATIC_REQUIRE(sizeof(FrameConstantsVK) == 816);
 }
 
 TEST_CASE("Vulkan mapped buffer upload copies frame constants bytes", "[vulkan][frame-constants]")
@@ -111,6 +134,23 @@ TEST_CASE("Vulkan frame constants preserve frame camera matrices", "[vulkan][fra
     CHECK(constants.sunDirection[1] == -0.75f);
     CHECK(constants.sunDirection[2] == 0.5f);
     CHECK(constants.sunDirection[3] == 0.0f);
+    CHECK(constants.lightingParams[1] == 2.0f);
+    CHECK(constants.lightingParams[2] == 0.6f);
+    CHECK(constants.localLightPosition[0][0] == 1.0f);
+    CHECK(constants.localLightPosition[0][1] == 2.0f);
+    CHECK(constants.localLightPosition[0][2] == 3.0f);
+    CHECK(constants.localLightPosition[0][3] == 50.0f);
+    CHECK(constants.localLightDiffuse[0][0] == 0.7f);
+    CHECK(constants.localLightDiffuse[0][1] == 0.6f);
+    CHECK(constants.localLightDiffuse[0][2] == 0.5f);
+    CHECK(constants.localLightAmbient[0][0] == 0.1f);
+    CHECK(constants.localLightAmbient[0][1] == 0.2f);
+    CHECK(constants.localLightAmbient[0][2] == 0.3f);
+    CHECK(constants.localLightDirection[0][1] == -1.0f);
+    CHECK(constants.localLightDirection[0][3] == 0.0f);
+    CHECK(constants.localLightPosition[1][0] == 4.0f);
+    CHECK(constants.localLightPosition[1][3] == 75.0f);
+    CHECK(constants.localLightDirection[1][3] == 1.0f);
 }
 
 TEST_CASE("Vulkan frame constants expose viewport and world rect", "[vulkan][frame-constants]")
@@ -144,6 +184,8 @@ TEST_CASE("Vulkan frame constants normalize RGBA fog color", "[vulkan][frame-con
     CHECK(constants.fogColor[2] == Catch::Approx(0x99 / 255.0f));
     CHECK(constants.fogColor[3] == Catch::Approx(0xcc / 255.0f));
     CHECK(constants.lightingParams[0] == 1.0f);
+    CHECK(constants.lightingParams[1] == 2.0f);
+    CHECK(constants.lightingParams[2] == 0.6f);
 }
 
 TEST_CASE("Vulkan frame constants disable fog for non-positive ranges", "[vulkan][frame-constants]")

@@ -18,8 +18,12 @@ struct FrameConstantsVK
     float worldRect[4] = {};  // left, top, right, bottom
     float fogParams[4] = {};  // start, end, inverse range, enabled
     float fogColor[4] = {};   // rgba, normalized
-    float lightingParams[4] = {}; // sun enabled, reserved
+    float lightingParams[4] = {}; // sun enabled, local light count, local light scale, reserved
     float sunDirection[4] = {};  // xyz world-space travel direction (normalized), w unused
+    float localLightPosition[render::frame::kMaxFrameLocalLights][4] = {}; // xyz camera-relative, w startAtten
+    float localLightDiffuse[render::frame::kMaxFrameLocalLights][4] = {};
+    float localLightAmbient[render::frame::kMaxFrameLocalLights][4] = {};
+    float localLightDirection[render::frame::kMaxFrameLocalLights][4] = {}; // xyz beam dir, w spot flag
 };
 
 static_assert(sizeof(GfxMatrix) == 64);
@@ -33,7 +37,11 @@ static_assert(offsetof(FrameConstantsVK, fogParams) == 240);
 static_assert(offsetof(FrameConstantsVK, fogColor) == 256);
 static_assert(offsetof(FrameConstantsVK, lightingParams) == 272);
 static_assert(offsetof(FrameConstantsVK, sunDirection) == 288);
-static_assert(sizeof(FrameConstantsVK) == 304);
+static_assert(offsetof(FrameConstantsVK, localLightPosition) == 304);
+static_assert(offsetof(FrameConstantsVK, localLightDiffuse) == 432);
+static_assert(offsetof(FrameConstantsVK, localLightAmbient) == 560);
+static_assert(offsetof(FrameConstantsVK, localLightDirection) == 688);
+static_assert(sizeof(FrameConstantsVK) == 816);
 
 inline float ChannelToFloat(std::uint32_t value) noexcept
 {
@@ -74,10 +82,37 @@ inline FrameConstantsVK BuildFrameConstants(const render::frame::Frame& frame) n
     constants.fogColor[2] = ChannelToFloat(rgba >> 8);
     constants.fogColor[3] = ChannelToFloat(rgba);
     constants.lightingParams[0] = frame.sunEnabled ? 1.0f : 0.0f;
+    const std::uint32_t localLightCount =
+        frame.localLightCount < render::frame::kMaxFrameLocalLights
+            ? frame.localLightCount
+            : static_cast<std::uint32_t>(render::frame::kMaxFrameLocalLights);
+    constants.lightingParams[1] = static_cast<float>(localLightCount);
+    constants.lightingParams[2] = frame.localLightScale;
     constants.sunDirection[0] = frame.sunDirection[0];
     constants.sunDirection[1] = frame.sunDirection[1];
     constants.sunDirection[2] = frame.sunDirection[2];
     constants.sunDirection[3] = 0.0f;
+    for (std::uint32_t i = 0; i < localLightCount; ++i)
+    {
+        const render::frame::LocalLight& light = frame.localLights[i];
+        constants.localLightPosition[i][0] = light.position[0];
+        constants.localLightPosition[i][1] = light.position[1];
+        constants.localLightPosition[i][2] = light.position[2];
+        constants.localLightPosition[i][3] = light.startAtten;
+        constants.localLightDiffuse[i][0] = light.diffuse[0];
+        constants.localLightDiffuse[i][1] = light.diffuse[1];
+        constants.localLightDiffuse[i][2] = light.diffuse[2];
+        constants.localLightDiffuse[i][3] = 0.0f;
+        constants.localLightAmbient[i][0] = light.ambient[0];
+        constants.localLightAmbient[i][1] = light.ambient[1];
+        constants.localLightAmbient[i][2] = light.ambient[2];
+        constants.localLightAmbient[i][3] = 0.0f;
+        constants.localLightDirection[i][0] = light.direction[0];
+        constants.localLightDirection[i][1] = light.direction[1];
+        constants.localLightDirection[i][2] = light.direction[2];
+        constants.localLightDirection[i][3] =
+            light.kind == render::frame::LocalLightKind::Spot ? 1.0f : 0.0f;
+    }
     return constants;
 }
 

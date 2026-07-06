@@ -56,6 +56,12 @@ Frame BuildFrame(const SceneInputs& s)
     f.sunDirection[0] = s.sunDirection[0];
     f.sunDirection[1] = s.sunDirection[1];
     f.sunDirection[2] = s.sunDirection[2];
+    f.localLightScale = s.localLightScale;
+    f.localLightCount = s.localLightCount;
+    if (f.localLightCount > kMaxFrameLocalLights)
+        f.localLightCount = static_cast<std::uint32_t>(kMaxFrameLocalLights);
+    for (std::uint32_t i = 0; i < f.localLightCount; ++i)
+        f.localLights[i] = s.localLights[i];
     f.fogStart = s.fogStart;
     f.fogEnd = s.fogEnd;
     f.fogColorRGBA = s.fogColorRGBA;

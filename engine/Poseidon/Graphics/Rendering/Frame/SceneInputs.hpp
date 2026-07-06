@@ -56,6 +56,9 @@ struct SceneInputs
     // down-and-forward so unlit/extractor-absent frames still have a sane
     // direction rather than (0,0,0) which would produce NaN diffuse terms.
     float     sunDirection[3]   = {0.0f, -1.0f, 0.0f};
+    float     localLightScale   = 1.0f;
+    std::uint32_t localLightCount = 0;
+    std::array<LocalLight, kMaxFrameLocalLights> localLights = {};
     float     fogStart          = 0.0f;
     float     fogEnd            = 1000.0f;
     std::uint32_t fogColorRGBA  = 0;

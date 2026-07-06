@@ -118,7 +118,10 @@ smoke-testable.
   (vertex-computed fog factor mixed toward frame.fogColor).
 - [x] Drive directional sun lighting from the uploaded frame constants in the
   scene shaders.
-- [ ] Add local light extraction and scene-shader consumption.
+- [x] Add first frame-global active local light extraction and scene-shader
+  consumption for Vulkan point/spot lighting bring-up.
+- [ ] Refine Vulkan local lighting toward per-object light lists,
+  material-scaled colors, and GL33 visual parity.
 - [ ] Upload static and dynamic mesh buffers through backend-owned resources.
 - [ ] Implement texture creation, sampler state, mip use, and fallback behavior.
 - [ ] Build complete Vulkan scene pipeline state from the existing render-pass

@@ -8,6 +8,7 @@
 #include <Poseidon/Graphics/Rendering/Frame/Buffers.hpp>
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -84,6 +85,26 @@ struct CameraView
     float worldTop = 0.0f;
     float worldRight = 1.0f;
     float worldBottom = 1.0f;
+};
+
+inline constexpr std::size_t kMaxFrameLocalLights = 8;
+
+enum class LocalLightKind : std::uint8_t
+{
+    Point = 0,
+    Spot = 1,
+};
+
+struct LocalLight
+{
+    // Camera-relative position matching captured draw world matrices.
+    float position[3] = {0.0f, 0.0f, 0.0f};
+    // World-space beam direction. Used when kind == Spot.
+    float direction[3] = {0.0f, 0.0f, 1.0f};
+    float diffuse[3] = {0.0f, 0.0f, 0.0f};
+    float ambient[3] = {0.0f, 0.0f, 0.0f};
+    float startAtten = 0.0f;
+    LocalLightKind kind = LocalLightKind::Point;
 };
 
 // Projection and viewportScale live in different struct members at
@@ -187,6 +208,9 @@ struct Frame
     // World-space direction the sun light travels (normalized). Matches
     // SceneInputs; backends negate it to obtain the vector toward the light.
     float sunDirection[3] = {0.0f, -1.0f, 0.0f};
+    float localLightScale = 1.0f;
+    std::uint32_t localLightCount = 0;
+    std::array<LocalLight, kMaxFrameLocalLights> localLights = {};
 
     // Per-frame GL error delta carried from SceneInputs.  Non-zero =
     // a new HIGH-severity GL error fired this frame.

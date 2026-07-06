@@ -134,6 +134,35 @@ TEST_CASE("Frame/BuildFrame: sun direction passes through unchanged", "[render-f
     REQUIRE(f.sunDirection[2] == 0.5f);
 }
 
+TEST_CASE("Frame/BuildFrame: local lights pass through unchanged", "[render-frame][build-frame]")
+{
+    auto s = makeMinimal();
+    s.localLightScale = 0.6f;
+    s.localLightCount = 1;
+    s.localLights[0].position[0] = 1.0f;
+    s.localLights[0].position[1] = 2.0f;
+    s.localLights[0].position[2] = 3.0f;
+    s.localLights[0].direction[0] = 0.0f;
+    s.localLights[0].direction[1] = -1.0f;
+    s.localLights[0].direction[2] = 0.0f;
+    s.localLights[0].diffuse[0] = 0.7f;
+    s.localLights[0].ambient[1] = 0.2f;
+    s.localLights[0].startAtten = 50.0f;
+    s.localLights[0].kind = v2::LocalLightKind::Spot;
+
+    const auto f = Poseidon::render::frame::BuildFrame(s);
+    REQUIRE(f.localLightScale == 0.6f);
+    REQUIRE(f.localLightCount == 1);
+    REQUIRE(f.localLights[0].position[0] == 1.0f);
+    REQUIRE(f.localLights[0].position[1] == 2.0f);
+    REQUIRE(f.localLights[0].position[2] == 3.0f);
+    REQUIRE(f.localLights[0].direction[1] == -1.0f);
+    REQUIRE(f.localLights[0].diffuse[0] == 0.7f);
+    REQUIRE(f.localLights[0].ambient[1] == 0.2f);
+    REQUIRE(f.localLights[0].startAtten == 50.0f);
+    REQUIRE(f.localLights[0].kind == v2::LocalLightKind::Spot);
+}
+
 TEST_CASE("Frame/BuildFrame: one WorldOpaque draw -> single WorldOpaque pass with clear", "[render-frame][build-frame]")
 {
     auto s = makeMinimal();

@@ -64,6 +64,43 @@ CameraView extractCamera(const Engine& engine, const ::Scene& scene)
     return out;
 }
 
+void extractLocalLights(SceneInputs& out, const ::Scene& scene)
+{
+    const ::Camera* cam = scene.GetCamera();
+    const Vector3 camPos = cam ? cam->Position() : VZero;
+    const LightList& lights = scene.ActiveLights();
+    for (int i = 0; i < lights.Size() && out.localLightCount < kMaxFrameLocalLights; ++i)
+    {
+        const Light* light = lights[i];
+        if (!light || !light->IsOn())
+            continue;
+
+        LightDescription desc;
+        light->GetDescription(desc);
+        const bool isSpot = desc.type == LTSpotLight;
+        if (desc.type != LTPoint && !isSpot)
+            continue;
+
+        LocalLight& local = out.localLights[out.localLightCount];
+        const Vector3 relPos = desc.pos - camPos;
+        local.position[0] = relPos.X();
+        local.position[1] = relPos.Y();
+        local.position[2] = relPos.Z();
+        local.direction[0] = desc.dir.X();
+        local.direction[1] = desc.dir.Y();
+        local.direction[2] = desc.dir.Z();
+        local.diffuse[0] = desc.diffuse.R();
+        local.diffuse[1] = desc.diffuse.G();
+        local.diffuse[2] = desc.diffuse.B();
+        local.ambient[0] = desc.ambient.R();
+        local.ambient[1] = desc.ambient.G();
+        local.ambient[2] = desc.ambient.B();
+        local.startAtten = desc.startAtten;
+        local.kind = isSpot ? LocalLightKind::Spot : LocalLightKind::Point;
+        ++out.localLightCount;
+    }
+}
+
 // Convert a recorded DrawItem into a value-typed SceneDraw.  The
 // backend stored just enough to replay the GL call; we add the typed
 // descriptor by translating the raw spec via BuildRenderPassDescriptor
@@ -172,11 +209,14 @@ SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
         s.sunDirection[0] = dir.X();
         s.sunDirection[1] = dir.Y();
         s.sunDirection[2] = dir.Z();
+        s.localLightScale = sun->NightEffect();
     }
     else
     {
         s.sunEnabled = false;
+        s.localLightScale = 1.0f;
     }
+    extractLocalLights(s, scene);
 
     // Flags — read from live world state where available.
     s.flags.hudEnabled = true;

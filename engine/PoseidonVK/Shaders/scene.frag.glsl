@@ -19,6 +19,10 @@ layout(set = 0, binding = 0, std140) uniform FrameConstants
     vec4 fogColor;
     vec4 lightingParams;
     vec4 sunDirection;
+    vec4 localLightPosition[8];
+    vec4 localLightDiffuse[8];
+    vec4 localLightAmbient[8];
+    vec4 localLightDirection[8];
 } frame;
 
 void main()
@@ -31,9 +35,52 @@ void main()
     vec3 rawSunDir = frame.sunDirection.xyz;
     vec3 sunDir = length(rawSunDir) > 0.0001f ? normalize(rawSunDir) : vec3(0.0f, -1.0f, 0.0f);
     float sunOn = (frame.lightingParams.x > 0.5) ? 1.0 : 0.0;
-    float diffuse = max(dot(normalize(vWorldNormal), -sunDir), 0.0f) * sunOn;
+    vec3 normal = normalize(vWorldNormal);
+    float diffuse = max(dot(normal, -sunDir), 0.0f) * sunOn;
     float ambient = 0.35f;
-    float light = ambient + diffuse * 0.65f;
+    vec3 light = vec3(ambient + diffuse * 0.65f);
+
+    const float minInside2 = 0.95677279f;
+    const float maxInside2 = 0.98063081f;
+    int localLightCount = min(int(frame.lightingParams.y + 0.5f), 8);
+    float localLightScale = max(frame.lightingParams.z, 0.0f);
+    for (int i = 0; i < localLightCount; ++i)
+    {
+        vec3 toLight = frame.localLightPosition[i].xyz - vWorldPos;
+        float size2 = dot(toLight, toLight);
+        float startAtten2 = frame.localLightPosition[i].w * frame.localLightPosition[i].w;
+        float endAtten2 = startAtten2 * 100.0f;
+        if (size2 <= 0.0001f || size2 >= endAtten2)
+            continue;
+
+        float cone = 1.0f;
+        if (frame.localLightDirection[i].w > 0.5f)
+        {
+            vec3 beamDir = normalize(frame.localLightDirection[i].xyz);
+            float inside = -dot(toLight, beamDir);
+            if (inside <= 0.0f)
+                continue;
+            float cos2 = (inside * inside) / size2;
+            if (cos2 < minInside2)
+                continue;
+            cone = clamp((cos2 - minInside2) / (maxInside2 - minInside2), 0.0f, 1.0f);
+        }
+
+        float atten = (size2 >= startAtten2) ? (startAtten2 / size2) : 1.0f;
+        float cosFi = dot(toLight, normal);
+        vec3 localDiffuse = frame.localLightDiffuse[i].rgb * localLightScale;
+        vec3 localAmbient = frame.localLightAmbient[i].rgb * localLightScale;
+        if (cosFi > 0.0f)
+        {
+            cosFi *= inversesqrt(size2);
+            light += (localDiffuse * cosFi + localAmbient) * (atten * cone);
+        }
+        else
+        {
+            light += localAmbient * atten;
+        }
+    }
+    light = clamp(light, 0.0f, 1.0f);
 
     // UV-driven two-tone color so the smoke test can tell the scene draw apart
     // from the bootstrap triangle and confirm UVs travel through correctly.

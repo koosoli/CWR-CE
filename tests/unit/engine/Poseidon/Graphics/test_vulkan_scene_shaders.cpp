@@ -116,8 +116,16 @@ TEST_CASE("Vulkan scene shaders share the frame descriptor contract", "[vulkan][
     CHECK(vertexSource.find("mat4 projection;") != std::string::npos);
     CHECK(vertexSource.find("mat4 sunMatrix;") != std::string::npos);
     CHECK(vertexSource.find("vec4 sunDirection;") != std::string::npos);
+    CHECK(vertexSource.find("vec4 localLightPosition[8];") != std::string::npos);
+    CHECK(vertexSource.find("vec4 localLightDiffuse[8];") != std::string::npos);
+    CHECK(vertexSource.find("vec4 localLightAmbient[8];") != std::string::npos);
+    CHECK(vertexSource.find("vec4 localLightDirection[8];") != std::string::npos);
     CHECK(fragmentSource.find("layout(set = 0, binding = 0, std140) uniform FrameConstants") != std::string::npos);
     CHECK(fragmentSource.find("vec4 sunDirection;") != std::string::npos);
+    CHECK(fragmentSource.find("vec4 localLightPosition[8];") != std::string::npos);
+    CHECK(fragmentSource.find("vec4 localLightDiffuse[8];") != std::string::npos);
+    CHECK(fragmentSource.find("vec4 localLightAmbient[8];") != std::string::npos);
+    CHECK(fragmentSource.find("vec4 localLightDirection[8];") != std::string::npos);
 }
 
 TEST_CASE("Vulkan scene vertex shader reads per-draw constants from the SSBO", "[vulkan][scene-shaders]")
@@ -167,6 +175,21 @@ TEST_CASE("Vulkan scene fragment shader drives sun lighting from frame constants
     CHECK(fragmentSource.find("frame.lightingParams.x") != std::string::npos);
     CHECK(fragmentSource.find("-sunDir") != std::string::npos);
     CHECK(fragmentSource.find("* sunOn") != std::string::npos);
+}
+
+TEST_CASE("Vulkan scene fragment shader consumes uploaded local lights", "[vulkan][scene-shaders]")
+{
+    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
+    const std::string fragmentSource = ReadTextFile(shaderDir / "scene.frag.glsl");
+
+    CHECK(fragmentSource.find("frame.lightingParams.y") != std::string::npos);
+    CHECK(fragmentSource.find("frame.lightingParams.z") != std::string::npos);
+    CHECK(fragmentSource.find("frame.localLightPosition[i].xyz - vWorldPos") != std::string::npos);
+    CHECK(fragmentSource.find("frame.localLightPosition[i].w * frame.localLightPosition[i].w") !=
+          std::string::npos);
+    CHECK(fragmentSource.find("frame.localLightDirection[i].w > 0.5") != std::string::npos);
+    CHECK(fragmentSource.find("frame.localLightDiffuse[i].rgb * localLightScale") != std::string::npos);
+    CHECK(fragmentSource.find("frame.localLightAmbient[i].rgb * localLightScale") != std::string::npos);
 }
 
 TEST_CASE("Vulkan scene shaders declare the world push constant", "[vulkan][scene-shaders]")

@@ -122,6 +122,10 @@ TEST_CASE("Vulkan bootstrap push constants match shader contract", "[vulkan][sha
     CHECK(vertexSource.find("vec4 fogColor;") != std::string::npos);
     CHECK(vertexSource.find("vec4 lightingParams;") != std::string::npos);
     CHECK(vertexSource.find("vec4 sunDirection;") != std::string::npos);
+    CHECK(vertexSource.find("vec4 localLightPosition[8];") != std::string::npos);
+    CHECK(vertexSource.find("vec4 localLightDiffuse[8];") != std::string::npos);
+    CHECK(vertexSource.find("vec4 localLightAmbient[8];") != std::string::npos);
+    CHECK(vertexSource.find("vec4 localLightDirection[8];") != std::string::npos);
     CHECK(vertexSource.find("gl_VertexIndex") == std::string::npos);
     CHECK(fragmentSource.find("layout(push_constant) uniform BootstrapConstants") != std::string::npos);
     CHECK(fragmentSource.find("vec4 viewport;") != std::string::npos);
