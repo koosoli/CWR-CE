@@ -82,56 +82,64 @@ void main()
 
     // -----------------------------------------------------------------------
     // Directional (sun) + local lighting
+    // Only applied when DrawConstants.lighting != 0. Unlit draws (HUD markers,
+    // flat-shaded icons, kFamilyFlat) get full-bright light = vec3(1.0).
     // -----------------------------------------------------------------------
-    vec3 rawSunDir = frame.sunDirection.xyz;
-    vec3 sunDir    = length(rawSunDir) > 0.0001f ? normalize(rawSunDir) : vec3(0.0f, -1.0f, 0.0f);
-    float sunOn    = (frame.lightingParams.x > 0.5) ? 1.0 : 0.0;
-    vec3 normal    = normalize(vWorldNormal);
-    float diffuse  = max(dot(normal, -sunDir), 0.0f) * sunOn;
-    float ambient  = 0.35f;
-    vec3 light     = vec3(ambient + diffuse * 0.65f);
+    bool litDraw = hasDraw && (drawConstants.draws[drawIdx].lighting != 0u);
+    vec3 light   = vec3(1.0f); // default: unlit / full-bright
 
-    const float minInside2 = 0.95677279f;
-    const float maxInside2 = 0.98063081f;
-    int   localLightCount  = min(int(frame.lightingParams.y + 0.5f), 8);
-    float localLightScale  = max(frame.lightingParams.z, 0.0f);
-    for (int i = 0; i < localLightCount; ++i)
+    if (litDraw)
     {
-        vec3  toLight     = frame.localLightPosition[i].xyz - vWorldPos;
-        float size2       = dot(toLight, toLight);
-        float startAtten2 = frame.localLightPosition[i].w * frame.localLightPosition[i].w;
-        float endAtten2   = startAtten2 * 100.0f;
-        if (size2 <= 0.0001f || size2 >= endAtten2)
-            continue;
+        vec3 rawSunDir = frame.sunDirection.xyz;
+        vec3 sunDir    = length(rawSunDir) > 0.0001f ? normalize(rawSunDir) : vec3(0.0f, -1.0f, 0.0f);
+        float sunOn    = (frame.lightingParams.x > 0.5) ? 1.0 : 0.0;
+        vec3 normal    = normalize(vWorldNormal);
+        float diffuse  = max(dot(normal, -sunDir), 0.0f) * sunOn;
+        float ambient  = 0.35f;
+        light          = vec3(ambient + diffuse * 0.65f);
 
-        float cone = 1.0f;
-        if (frame.localLightDirection[i].w > 0.5f)
+        const float minInside2 = 0.95677279f;
+        const float maxInside2 = 0.98063081f;
+        int   localLightCount  = min(int(frame.lightingParams.y + 0.5f), 8);
+        float localLightScale  = max(frame.lightingParams.z, 0.0f);
+        for (int i = 0; i < localLightCount; ++i)
         {
-            vec3  beamDir = normalize(frame.localLightDirection[i].xyz);
-            float inside  = -dot(toLight, beamDir);
-            if (inside <= 0.0f)
+            vec3  toLight     = frame.localLightPosition[i].xyz - vWorldPos;
+            float size2       = dot(toLight, toLight);
+            float startAtten2 = frame.localLightPosition[i].w * frame.localLightPosition[i].w;
+            float endAtten2   = startAtten2 * 100.0f;
+            if (size2 <= 0.0001f || size2 >= endAtten2)
                 continue;
-            float cos2 = (inside * inside) / size2;
-            if (cos2 < minInside2)
-                continue;
-            cone = clamp((cos2 - minInside2) / (maxInside2 - minInside2), 0.0f, 1.0f);
-        }
 
-        float atten     = (size2 >= startAtten2) ? (startAtten2 / size2) : 1.0f;
-        float cosFi     = dot(toLight, normal);
-        vec3  localDiff = frame.localLightDiffuse[i].rgb  * localLightScale;
-        vec3  localAmb  = frame.localLightAmbient[i].rgb  * localLightScale;
-        if (cosFi > 0.0f)
-        {
-            cosFi *= inversesqrt(size2);
-            light += (localDiff * cosFi + localAmb) * (atten * cone);
+            float cone = 1.0f;
+            if (frame.localLightDirection[i].w > 0.5f)
+            {
+                vec3  beamDir = normalize(frame.localLightDirection[i].xyz);
+                float inside  = -dot(toLight, beamDir);
+                if (inside <= 0.0f)
+                    continue;
+                float cos2 = (inside * inside) / size2;
+                if (cos2 < minInside2)
+                    continue;
+                cone = clamp((cos2 - minInside2) / (maxInside2 - minInside2), 0.0f, 1.0f);
+            }
+
+            float atten     = (size2 >= startAtten2) ? (startAtten2 / size2) : 1.0f;
+            float cosFi     = dot(toLight, normal);
+            vec3  localDiff = frame.localLightDiffuse[i].rgb  * localLightScale;
+            vec3  localAmb  = frame.localLightAmbient[i].rgb  * localLightScale;
+            if (cosFi > 0.0f)
+            {
+                cosFi *= inversesqrt(size2);
+                light += (localDiff * cosFi + localAmb) * (atten * cone);
+            }
+            else
+            {
+                light += localAmb * atten;
+            }
         }
-        else
-        {
-            light += localAmb * atten;
-        }
+        light = clamp(light, 0.0f, 1.0f);
     }
-    light = clamp(light, 0.0f, 1.0f);
 
     // -----------------------------------------------------------------------
     // Texture samples
@@ -192,7 +200,13 @@ void main()
         baseColor = c0.rgb * light + vec3(specular * 0.4);
         baseAlpha = c0.a;
     }
-    else // kFamilyNormal or kFamilyFlat — single-texture lit
+    else if (family == kFamilyFlat)
+    {
+        // Flat: unlit — tex0 color at full brightness regardless of light.
+        baseColor = c0.rgb;
+        baseAlpha = c0.a;
+    }
+    else // kFamilyNormal — single-texture directionally lit
     {
         baseColor = c0.rgb * light;
         baseAlpha = c0.a;

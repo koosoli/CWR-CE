@@ -34,14 +34,18 @@ struct FormatInfo
 // Mirrors TextureGL33_Init::DstFormat() but without GL-specific hardware
 // capability checks — Vulkan natively supports all 16-bit, 32-bit, and
 // DXT formats, so only the P8 palette-expand requires a conversion.
+//
+// NOTE: PacARGB4444 and PacARGB1555 stay at their native format here so that
+// GetMipmapData / LoadPaaBin16's '_sFormat == _dFormat' assertion passes.
+// A transcoding step in UploadMips() then converts the raw 16-bit pixels to
+// 32-bit RGBA8 (VK_FORMAT_R8G8B8A8_UNORM) before uploading, matching what
+// GL33 achieves via GL_BGRA + GL_UNSIGNED_SHORT_*_REV.
 static PacFormat DstFormatVK(PacFormat srcFormat)
 {
     switch (srcFormat)
     {
-        case PacP8:
-            return PacARGB1555; // palette-expand: 8-bit indexed → 16-bit ARGB1555
-        default:
-            return srcFormat;   // identity for ARGB1555/4444/8888, RGB565, AI88, DXT*
+        case PacP8:       return PacARGB1555; // palette-expand: 8-bit indexed → 16-bit ARGB1555
+        default:          return srcFormat;   // identity: keep native format for GetMipmapData
     }
 }
 
@@ -54,12 +58,16 @@ FormatInfo PacFormatToVk(PacFormat fmt)
         case PacDXT3: return {VK_FORMAT_BC2_UNORM_BLOCK, true};
         case PacDXT4: // fallthrough
         case PacDXT5: return {VK_FORMAT_BC3_UNORM_BLOCK, true};
-        case PacARGB8888: return {VK_FORMAT_B8G8R8A8_UNORM, false};
-        case PacRGB565: return {VK_FORMAT_R5G6B5_UNORM_PACK16, false};
-        case PacARGB4444: return {VK_FORMAT_B4G4R4A4_UNORM_PACK16, false};
-        case PacAI88: return {VK_FORMAT_R8G8_UNORM, false};
-        case PacARGB1555: // fallthrough
-        default: return {VK_FORMAT_B5G5R5A1_UNORM_PACK16, false};
+        // PacARGB8888: decoded bytes come out as [R][G][B][A] from the in-memory
+        // transcoder (argb4444/1555 → rgba8) and are uploaded as RGBA8_UNORM.
+        // PacARGB4444 / PacARGB1555 also map here because UploadMips transcodes
+        // those to RGBA8 before upload.
+        case PacARGB8888:  return {VK_FORMAT_R8G8B8A8_UNORM, false};
+        case PacARGB4444:  return {VK_FORMAT_R8G8B8A8_UNORM, false}; // transcoded in UploadMips
+        case PacARGB1555:  return {VK_FORMAT_R8G8B8A8_UNORM, false}; // transcoded in UploadMips
+        case PacRGB565:    return {VK_FORMAT_R5G6B5_UNORM_PACK16, false};
+        case PacAI88:      return {VK_FORMAT_R8G8_UNORM, false};
+        default:           return {VK_FORMAT_R8G8B8A8_UNORM, false};
     }
 }
 
@@ -143,7 +151,15 @@ bool TextureVK::Init(RStringB name)
     // fallback.  Without this step _dFormat stays 0, SetDestFormat(0) later
     // would hit the default Fail path, and LoadPaaBin16 would assert
     // '_sFormat == _dFormat'.
-    const PacFormat uploadFmt = DstFormatVK(_src->GetFormat());
+    //
+    // CHANNEL-ORDER NOTE: PacARGB4444 and PacARGB1555 keep their native format
+    // so that GetMipmapData / LoadPaaBin16's '_sFormat==_dFormat' assertion
+    // passes. UploadMips will then transcode the raw 16-bit pixels to RGBA8.
+    _nativeSrcFormat = _src->GetFormat();
+    const PacFormat uploadFmt = DstFormatVK(_nativeSrcFormat);
+    // Use uploadFmt (not _nativeSrcFormat) for the VkImage format lookup so that
+    // palette-expand paths (PacP8 → PacARGB1555) get the right VkFormat and the
+    // transcoder in UploadMips fires correctly.
     const FormatInfo fi = PacFormatToVk(uploadFmt);
     const uint32_t levels = static_cast<uint32_t>(_nMipmaps);
 
@@ -241,6 +257,23 @@ bool TextureVK::UploadMips()
     // DstFormat() is now valid (non-zero) — same pattern as GL33_Loading.cpp.
     const PacFormat sharedFmt = _mipmaps[0].DstFormat();
 
+    // Flag whether UploadMips must transcode pixels before GPU upload.
+    // Use sharedFmt (the actual decoded format set on the mips via SetDestFormat)
+    // rather than _nativeSrcFormat, so that palette-expand paths
+    // (PacP8 → PacARGB1555) and any other aliasing are handled correctly.
+    // sharedFmt exactly matches what GetMipmapData produces.
+    //
+    // PacARGB4444 raw bytes: A4R4G4B4 (bits 15-12=A, 11-8=R, 7-4=G, 3-0=B)
+    // PacARGB1555 raw bytes: A1R5G5B5 (bit15=A, 14-10=R, 9-5=G, 4-0=B)
+    // PacARGB8888 raw bytes: [A,R,G,B] byte order (ARGB stored big-endian)
+    // None of these map correctly to any Vulkan format without conversion.
+    // GL33 uses GL_BGRA+GL_UNSIGNED_SHORT/INT_*_REV for the byte-swap; we
+    // perform the equivalent conversion in software during UploadMips.
+    const bool transcode4444 = (sharedFmt == PacARGB4444);
+    const bool transcode1555 = (sharedFmt == PacARGB1555);
+    const bool transcode8888 = (sharedFmt == PacARGB8888);
+    const bool needsTranscode = transcode4444 || transcode1555 || transcode8888;
+
     for (int i = 0; i < _nMipmaps; ++i)
     {
         const PacLevelMem& srcMip = _mipmaps[i];
@@ -255,24 +288,87 @@ bool TextureVK::UploadMips()
         if (dataSize == 0)
             continue;
 
-        // Allocate staging buffer
+        // Allocate staging buffer. Transcoded formats are always 4 bytes/pixel
+        // (RGBA8) regardless of source width: 16-bit formats expand, 8888 swaps in-place.
+        const std::size_t pixelCount = static_cast<std::size_t>(srcMip._w) * static_cast<std::size_t>(srcMip._h);
+        const std::size_t uploadSize = needsTranscode ? pixelCount * 4u : dataSize;
+
         vk::BufferVK staging;
         VkResult r = vk::CreateHostVisibleBuffer(
             _engine._physicalDevice, _engine._device,
-            static_cast<VkDeviceSize>(dataSize),
+            static_cast<VkDeviceSize>(uploadSize),
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             staging);
         if (r != VK_SUCCESS)
             continue;
 
-        // Decode the mip into the staging buffer; _dFormat is already correctly
-        // set on mipCopy so LoadPaaBin16's '_sFormat == _dFormat' assertion passes.
+        // Decode the mip into a temporary 16-bit buffer; _dFormat is already
+        // correctly set on mipCopy so LoadPaaBin16's assertion passes.
         std::vector<char> pixelData(dataSize);
         int ok = _src->GetMipmapData(pixelData.data(), mip, i);
         if (!ok)
             std::memset(pixelData.data(), 0, dataSize);
 
-        vk::UploadMappedBuffer(staging, pixelData.data(), dataSize);
+        // Transcode pixels to Vulkan-compatible RGBA8 layout when required.
+        //   ARGB4444: bits 15-12=A, 11-8=R, 7-4=G, 3-0=B  → [R8,G8,B8,A8]
+        //   ARGB1555: bit15=A, 14-10=R, 9-5=G, 4-0=B       → [R8,G8,B8,A8]
+        //   ARGB8888: raw bytes [A,R,G,B]                   → [R8,G8,B8,A8]
+        // All output as VK_FORMAT_R8G8B8A8_UNORM.
+        std::vector<char> transcodedData;
+        const void* uploadPtr = pixelData.data();
+        if (needsTranscode)
+        {
+            transcodedData.resize(uploadSize);
+            uint8_t* dst8 = reinterpret_cast<uint8_t*>(transcodedData.data());
+            if (transcode4444)
+            {
+                const uint16_t* src16 = reinterpret_cast<const uint16_t*>(pixelData.data());
+                for (std::size_t p = 0; p < pixelCount; ++p)
+                {
+                    uint16_t px = src16[p];
+                    uint8_t  a  = (px >> 12) & 0xF;
+                    uint8_t  rv = (px >> 8)  & 0xF;
+                    uint8_t  g  = (px >> 4)  & 0xF;
+                    uint8_t  b  =  px        & 0xF;
+                    // Expand 4-bit channels to 8-bit by replicating the nibble.
+                    dst8[p * 4 + 0] = (rv << 4) | rv;
+                    dst8[p * 4 + 1] = (g  << 4) | g;
+                    dst8[p * 4 + 2] = (b  << 4) | b;
+                    dst8[p * 4 + 3] = (a  << 4) | a;
+                }
+            }
+            else if (transcode1555)
+            {
+                const uint16_t* src16 = reinterpret_cast<const uint16_t*>(pixelData.data());
+                for (std::size_t p = 0; p < pixelCount; ++p)
+                {
+                    uint16_t px = src16[p];
+                    uint8_t  a  = (px >> 15) & 0x1;
+                    uint8_t  rv = (px >> 10) & 0x1F;
+                    uint8_t  g  = (px >> 5)  & 0x1F;
+                    uint8_t  b  =  px        & 0x1F;
+                    // Expand 5-bit channels (and 1-bit alpha) to 8-bit.
+                    dst8[p * 4 + 0] = (rv << 3) | (rv >> 2);
+                    dst8[p * 4 + 1] = (g  << 3) | (g  >> 2);
+                    dst8[p * 4 + 2] = (b  << 3) | (b  >> 2);
+                    dst8[p * 4 + 3] = a ? 255u : 0u;
+                }
+            }
+            else // transcode8888: raw bytes [A,R,G,B] → [R,G,B,A]
+            {
+                const uint8_t* src8 = reinterpret_cast<const uint8_t*>(pixelData.data());
+                for (std::size_t p = 0; p < pixelCount; ++p)
+                {
+                    dst8[p * 4 + 0] = src8[p * 4 + 1]; // R
+                    dst8[p * 4 + 1] = src8[p * 4 + 2]; // G
+                    dst8[p * 4 + 2] = src8[p * 4 + 3]; // B
+                    dst8[p * 4 + 3] = src8[p * 4 + 0]; // A
+                }
+            }
+            uploadPtr = transcodedData.data();
+        }
+
+        vk::UploadMappedBuffer(staging, uploadPtr, uploadSize);
 
         // Copy staging buffer → device image mip i
         vk::CopyBufferToImage(_engine._device, _engine._commandPool, _engine._graphicsQueue,

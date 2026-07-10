@@ -582,6 +582,26 @@ AbstractTextBank::~AbstractTextBank() = default;
 
 void AbstractTextBank::DeleteAllAnimated()
 {
+    if (_animatedTextures.Size() > 0)
+    {
+        LOG_ERROR(Graphics, "DeleteAllAnimated: {} animated texture(s) leaked on shutdown!", _animatedTextures.Size());
+        for (int i = 0; i < _animatedTextures.Size(); i++)
+        {
+            AnimatedTexture* anim = _animatedTextures[i];
+            if (anim)
+            {
+                LOG_ERROR(Graphics, "  Leaked AnimatedTexture '%s' refcount=%d", anim->Name(), anim->RefCounter());
+                for (int a = 0; a < anim->Size(); a++)
+                {
+                    Texture* animA = anim->Get(a);
+                    if (animA)
+                    {
+                        LOG_ERROR(Graphics, "    Frame %d: '%s' refcount=%d", a, animA->Name(), animA->RefCounter());
+                    }
+                }
+            }
+        }
+    }
     PoseidonAssert(_animatedTextures.Size() == 0);
     _animatedTextures.Clear();
 }

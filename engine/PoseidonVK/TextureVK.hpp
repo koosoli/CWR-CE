@@ -59,6 +59,10 @@ private:
     int _nMipmaps = 0;
     int _maxSize = 256;
     PacLevelMem _mipmaps[MAX_MIPMAPS];
+    // Stores the raw source format before DstFormatVK mapping.
+    // Used by UploadMips to select the 16\u219232 transcoder for formats that
+    // cannot be natively uploaded to Vulkan with correct channel order.
+    PacFormat _nativeSrcFormat = PacARGB1555;
 
     vk::ImageVK _image;
     VkSampler _sampler = VK_NULL_HANDLE;
