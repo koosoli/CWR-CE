@@ -26,7 +26,13 @@ struct FrameConstantsVK
     float localLightDirection[render::frame::kMaxFrameLocalLights][4] = {}; // xyz beam dir, w spot flag
     float grassParams[4] = {};
     float time[4] = {};  // [0] = game-time seconds (for water UV animation); [1..3] unused
-};
+    // Shadow map cascade data — mirrors GL33 PSConstants layout (c2-c26 era).
+    // Zeroed by BuildFrameConstants; populated by EngineVK::UpdateShadowFrameConstants.
+    float shadowCtl[4] = {};       // {enable, bias, darkness, texelSize}
+    float cascadeVP[4][16] = {};   // per-cascade light VP matrices (column-major)
+    float cascadeSplits[4] = {};   // per-tier select distance
+    float cascadeCtl[4] = {};      // {count, fadeRange, biasBase, omniCount}
+    float camFwd[4] = {};};
 
 static_assert(sizeof(GfxMatrix) == 64);
 static_assert(offsetof(FrameConstantsVK, view) == 0);
@@ -45,7 +51,12 @@ static_assert(offsetof(FrameConstantsVK, localLightAmbient) == 560);
 static_assert(offsetof(FrameConstantsVK, localLightDirection) == 688);
 static_assert(offsetof(FrameConstantsVK, grassParams) == 816);
 static_assert(offsetof(FrameConstantsVK, time) == 832);
-static_assert(sizeof(FrameConstantsVK) == 848);
+static_assert(offsetof(FrameConstantsVK, shadowCtl) == 848);
+static_assert(offsetof(FrameConstantsVK, cascadeVP) == 864);
+static_assert(offsetof(FrameConstantsVK, cascadeSplits) == 1120);
+static_assert(offsetof(FrameConstantsVK, cascadeCtl) == 1136);
+static_assert(offsetof(FrameConstantsVK, camFwd) == 1152);
+static_assert(sizeof(FrameConstantsVK) == 1168);
 
 inline float ChannelToFloat(std::uint32_t value) noexcept
 {

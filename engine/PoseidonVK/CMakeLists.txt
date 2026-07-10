@@ -28,6 +28,9 @@ set(POSEIDON_VK_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/scene.frag.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/screen.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/screen.frag.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepth.vert.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthAlpha.vert.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthAlpha.frag.glsl
 )
 
 set(POSEIDON_VK_GENERATED_SHADER_HEADERS)

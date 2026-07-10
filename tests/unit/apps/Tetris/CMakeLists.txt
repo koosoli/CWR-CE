@@ -23,7 +23,7 @@ find_package(CLI11 CONFIG REQUIRED)
 find_package(imgui CONFIG REQUIRED)
 
 target_link_libraries(PoseidonTetrisTests PRIVATE
-    GameBase PoseidonGL33 Poseidon PoseidonOpenAL
+    GameBase PoseidonGL33 PoseidonVK Poseidon PoseidonOpenAL
     SDL3::SDL3 Freetype::Freetype CLI11::CLI11 imgui::imgui
     Catch2::Catch2WithMain
 )

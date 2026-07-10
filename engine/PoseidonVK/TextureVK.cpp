@@ -10,6 +10,7 @@
 #include <Poseidon/Graphics/Core/MipmapLayout.hpp>
 #include <Poseidon/Graphics/Rendering/Font/Pactext.hpp>
 #include <Poseidon/Foundation/Framework/Log.hpp>
+#include <Poseidon/Graphics/Textures/LooseTextures.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -114,8 +115,13 @@ bool TextureVK::Init(RStringB name)
     SetName(name);
     _resourceId = s_nextTextureId++;
 
-    ITextureSourceFactory* factory = SelectTextureSourceFactory(name);
-    if (!factory || !factory->Check(name))
+    // Resolve loose/mod texture overrides exactly as GL33 does (TextureGL33_Init.cpp:171).
+    // Without this, modded textures and any path redirects registered with the loose
+    // texture system are silently ignored, falling through to the fallback white texture.
+    RString resolved = Poseidon::Graphics::ResolveLooseTexturePath(name);
+
+    ITextureSourceFactory* factory = SelectTextureSourceFactory(resolved);
+    if (!factory || !factory->Check(resolved))
     {
         LOG_DEBUG(Graphics, "TextureVK: no source for '{}', using fallback ID", (const char*)name);
         // Leave _image null — sampler will also be null.  The frame extractor
@@ -123,7 +129,7 @@ bool TextureVK::Init(RStringB name)
         return true; // not a hard failure: game continues with missing-texture colour
     }
 
-    _src = factory->Create(name, _mipmaps, MAX_MIPMAPS);
+    _src = factory->Create(resolved, _mipmaps, MAX_MIPMAPS);
     if (!_src)
         return true;
 

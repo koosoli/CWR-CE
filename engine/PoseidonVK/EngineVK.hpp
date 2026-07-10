@@ -81,6 +81,16 @@ class EngineVK : public EngineDummy
     bool IsWindowed() const override { return _windowMode == WindowMode::Windowed; }
     bool IsResizable() const override { return _windowMode == WindowMode::Windowed; }
 
+    // --- Shadow map overrides ---
+    void SetShadowMapsEnabled(bool enabled) override;
+    bool ShadowMapsEnabled() const override;
+    ShadowMapTuning GetShadowMapTuning() const override;
+    void SetShadowMapTuning(const ShadowMapTuning& tuning) override;
+    void SetShadowMapSunFactor(float f) override;
+    void RenderShadowDepthScene(const float* lightVPs, const float* splitViewDist, const float* camFwd3, int numCascades, int omniCount, int res, const ShadowCasterSet& casters) override;
+    bool DumpShadowMap(const char* path) override;
+    bool ShadowMapCacheSelfTest() override;
+
   private:
     bool Initialize(int width, int height, bool windowed, int bitsPerPixel, const std::string& displayMode);
     bool CreateInstance();
@@ -246,6 +256,39 @@ class EngineVK : public EngineDummy
     TextBankVK* _textBank = nullptr;
     std::unordered_map<std::uint32_t, TextureVK*> _textureRegistry;
     Ref<TextureVK> _fallbackWhiteTexture;
+
+    // Shadow resources
+    static constexpr int kShadowCascades = 4;
+    vk::ImageVK _shadowDepthImage;
+    VkSampler _shadowSampler = VK_NULL_HANDLE;
+    VkImageView _shadowCascadeViews[kShadowCascades] = {};
+    VkRenderPass _shadowRenderPass = VK_NULL_HANDLE;
+    VkFramebuffer _shadowFramebuffers[kShadowCascades] = {};
+    VkPipeline _shadowDepthPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout _shadowDepthPipelineLayout = VK_NULL_HANDLE;
+    VkShaderModule _shadowDepthVertexModule = VK_NULL_HANDLE;
+    VkPipeline _shadowAlphaPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout _shadowAlphaPipelineLayout = VK_NULL_HANDLE;
+    VkShaderModule _shadowAlphaVertexModule = VK_NULL_HANDLE;
+    VkShaderModule _shadowAlphaFragmentModule = VK_NULL_HANDLE;
+    vk::BufferVK _shadowVertexBuffer;
+    int _shadowMapRes = 0;
+    int _shadowCascades = 0;
+    bool _shadowMapActive = false;
+    float _shadowMapVP[kShadowCascades * 16] = {};
+    float _shadowSplits[kShadowCascades] = {};
+    float _shadowCamFwd[3] = {};
+    int _shadowOmniCount = 0;
+    float _shadowSunFactor = 1.0f;
+    bool _shadowEnabled = false;
+    ShadowMapTuning _shadowTuning;
+
+    bool EnsureShadowResources(int res, int layers);
+    void DestroyShadowResources();
+    void UpdateShadowFrameConstants();
+    bool CreateShadowDepthPipeline();
+    bool CompileShader(const char* source, int stage, std::vector<uint32_t>& spirv, std::string& error);
+
 
     friend class VertexBufferVK;
     friend class TextureVK;

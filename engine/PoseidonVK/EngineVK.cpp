@@ -484,6 +484,11 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
         _fallbackWhiteTexture->_resourceId = TextureVK::kFallbackResourceId;
         RegisterTexture(_fallbackWhiteTexture);
     }
+
+    // Allocate dummy shadow map resources so that we always have a valid VK_IMAGE_VIEW_TYPE_2D_ARRAY image view bound
+    // to the frame descriptor set binding 2, preventing Vulkan validation errors.
+    EnsureShadowResources(16, 4);
+
     return true;
 }
 
@@ -1055,6 +1060,8 @@ void EngineVK::DestroyTextureDescriptorResources()
 
 bool EngineVK::CreateFrameDescriptorSet()
 {
+    EnsureShadowResources(16, 4);
+
     const std::array<VkDescriptorPoolSize, vk::kFrameDescriptorSetBindingCount> poolSizes =
         vk::MakeFrameDescriptorPoolSizes();
 
@@ -1113,9 +1120,15 @@ void EngineVK::UpdateFrameDescriptorSet()
     drawBufferInfo.offset = 0;
     drawBufferInfo.range = _drawConstantsBuffer.size;
 
+    VkDescriptorImageInfo shadowImageInfo{};
+    shadowImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    shadowImageInfo.imageView = _shadowDepthImage.view;
+    shadowImageInfo.sampler = _shadowSampler;
+
     std::array<VkWriteDescriptorSet, vk::kFrameDescriptorSetBindingCount> writes = {
         vk::MakeFrameConstantsDescriptorWrite(_frameDescriptorSet, &frameBufferInfo),
         vk::MakeDrawConstantsDescriptorWrite(_frameDescriptorSet, &drawBufferInfo),
+        vk::MakeShadowMapDescriptorWrite(_frameDescriptorSet, &shadowImageInfo),
     };
 
     vkUpdateDescriptorSets(_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
@@ -2131,6 +2144,7 @@ void EngineVK::EndDebugLabel(VkCommandBuffer commandBuffer) const
 
 void EngineVK::UploadFrameConstants()
 {
+    UpdateShadowFrameConstants();
     vk::UploadMappedBuffer(_frameConstantsBuffer, &_lastFrameConstants, sizeof(_lastFrameConstants));
 }
 
@@ -2651,6 +2665,8 @@ void EngineVK::PresentBootstrapFrame()
 
 void EngineVK::Shutdown()
 {
+    DestroyShadowResources();
+
     _fonts.Clear();
     // Destroy the texture bank before the device so GPU images are freed first.
     delete _textBank;
@@ -2722,6 +2738,11 @@ void EngineVK::Shutdown()
         _window = nullptr;
     }
     _open = false;
+}
+
+bool EngineVK::CompileShader(const char* source, int stage, std::vector<uint32_t>& spirv, std::string& error)
+{
+    return CompileBootstrapShader(source, static_cast<EShLanguage>(stage), spirv, error);
 }
 
 void EngineVK::HandleEvents()
