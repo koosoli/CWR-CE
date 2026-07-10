@@ -1,6 +1,10 @@
 #include <PoseidonVK/TextBankVK.hpp>
 #include <PoseidonVK/EngineVK.hpp>
 #include <Poseidon/Foundation/Framework/Log.hpp>
+#include <Poseidon/IO/ParamFile/ParamFile.hpp>
+#include <Poseidon/IO/Streams/QBStream.hpp>
+
+extern ParamFile Remaster;
 
 namespace Poseidon
 {
@@ -15,6 +19,10 @@ TextBankVK::~TextBankVK()
     UnlockAllTextures();
     DeleteAllAnimated();
     _textures.Clear();
+    _detail.Free();
+    _waterBump.Free();
+    _specular.Free();
+    _grass.Free();
 }
 
 // ---------------------------------------------------------------------------
@@ -71,6 +79,10 @@ void TextBankVK::FlushTextures()
     if (_engine._device)
         vkDeviceWaitIdle(_engine._device);
     _textures.Clear();
+    _detail.Free();
+    _waterBump.Free();
+    _specular.Free();
+    _grass.Free();
 }
 
 void TextBankVK::ReleaseAllTextures()
@@ -78,6 +90,10 @@ void TextBankVK::ReleaseAllTextures()
     if (_engine._device)
         vkDeviceWaitIdle(_engine._device);
     _textures.Clear();
+    _detail.Free();
+    _waterBump.Free();
+    _specular.Free();
+    _grass.Free();
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +207,52 @@ void TextBankVK::UpdateDynamic(Texture* t, const void* rgba, uint32_t size)
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     vk::DestroyBuffer(_engine._device, staging);
+}
+
+void TextBankVK::StartFrame()
+{
+    InitDetailTextures();
+}
+
+void TextBankVK::InitDetailTextures()
+{
+    if (_detail)
+        return;
+
+    const ParamEntry& names = Remaster >> "CfgDetailTextures";
+    RStringB detailName = names >> "detail";
+    if (QIFStreamB::FileExist(detailName))
+    {
+        _detail = new TextureVK(_engine);
+        _detail->SetName(detailName);
+        _detail->Init(detailName);
+    }
+
+    RStringB specularName = names >> "specular";
+    if (QIFStreamB::FileExist(specularName))
+    {
+        _specular = new TextureVK(_engine);
+        _specular->SetName(specularName);
+        _specular->Init(specularName);
+    }
+
+    RStringB grassName = names >> "grass";
+    if (QIFStreamB::FileExist(grassName))
+    {
+        _grass = new TextureVK(_engine);
+        _grass->SetName(grassName);
+        _grass->Init(grassName);
+        _grass->SetMaxSize(1024);
+    }
+
+    RStringB waterName = names >> "waterBump";
+    if (QIFStreamB::FileExist(waterName))
+    {
+        _waterBump = new TextureVK(_engine);
+        _waterBump->SetName(waterName);
+        _waterBump->Init(waterName);
+        _waterBump->SetMaxSize(1024);
+    }
 }
 
 } // namespace Poseidon

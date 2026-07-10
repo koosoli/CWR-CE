@@ -26,6 +26,7 @@ layout(set = 0, binding = 0, std140) uniform FrameConstants
     vec4 localLightDiffuse[8];
     vec4 localLightAmbient[8];
     vec4 localLightDirection[8];
+    vec4 grassParams;
 } frame;
 
 // Per-draw constants uploaded by the host from the backend-neutral frame plan.

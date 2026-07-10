@@ -508,6 +508,11 @@ void EngineVK::NextFrame()
 void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
 {
     _lastFrameConstants = vk::BuildFrameConstants(frame);
+    _lastFrameConstants.grassParams[0] = _grassParam[0];
+    _lastFrameConstants.grassParams[1] = _grassParam[1];
+    _lastFrameConstants.grassParams[2] = _grassParam[2];
+    _lastFrameConstants.grassParams[3] = _grassParam[3];
+
     _lastDrawConstants = vk::BuildDrawConstants(frame);
     _lastSceneDrawCommands = vk::BuildSceneDrawCommands(_lastDrawConstants);
     _hasFrameConstants = true;
@@ -734,7 +739,11 @@ bool EngineVK::CreatePipelineLayout()
 
 bool EngineVK::CreateScenePipelineLayout()
 {
-    VkDescriptorSetLayout setLayouts[] = {_frameDescriptorSetLayout, _textureDescriptorSetLayout};
+    VkDescriptorSetLayout setLayouts[] = {
+        _frameDescriptorSetLayout,
+        _textureDescriptorSetLayout,
+        _textureDescriptorSetLayout
+    };
 
     VkPushConstantRange pushConstants{};
     pushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
@@ -743,7 +752,7 @@ bool EngineVK::CreateScenePipelineLayout()
 
     VkPipelineLayoutCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    createInfo.setLayoutCount = 2;
+    createInfo.setLayoutCount = 3;
     createInfo.pSetLayouts = setLayouts;
     createInfo.pushConstantRangeCount = 1;
     createInfo.pPushConstantRanges = &pushConstants;
@@ -2185,6 +2194,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         if (!_lastSceneDrawCommands.empty())
         {
             VkDescriptorSet lastBoundTexDescriptorSet = VK_NULL_HANDLE;
+            VkDescriptorSet lastBoundTex1DescriptorSet = VK_NULL_HANDLE;
             for (const vk::SceneDrawCommandVK& command : _lastSceneDrawCommands)
             {
                 vk::PipelineKeyVK key;
@@ -2224,6 +2234,28 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipelineLayout, 1, 1,
                                             &texDescriptorSet, 0, nullptr);
                     lastBoundTexDescriptorSet = texDescriptorSet;
+                }
+
+                // Bind texture descriptor set (Set 2)
+                VkDescriptorSet tex1DescriptorSet = VK_NULL_HANDLE;
+                std::uint32_t texId1 = draw.textureIds[1];
+                if (texId1 != 0)
+                {
+                    TextureVK* tex = ResolveTexture(texId1);
+                    if (tex)
+                        tex1DescriptorSet = tex->GetDescriptorSet();
+                }
+
+                if (tex1DescriptorSet == VK_NULL_HANDLE && _fallbackWhiteTexture)
+                {
+                    tex1DescriptorSet = _fallbackWhiteTexture->GetDescriptorSet();
+                }
+
+                if (tex1DescriptorSet != VK_NULL_HANDLE && tex1DescriptorSet != lastBoundTex1DescriptorSet)
+                {
+                    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipelineLayout, 2, 1,
+                                            &tex1DescriptorSet, 0, nullptr);
+                    lastBoundTex1DescriptorSet = tex1DescriptorSet;
                 }
 
                 // Resolve the draw's mesh via the registry. Until real per-object
@@ -2282,6 +2314,8 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                 if (fallbackSet != VK_NULL_HANDLE)
                 {
                     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipelineLayout, 1, 1,
+                                            &fallbackSet, 0, nullptr);
+                    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipelineLayout, 2, 1,
                                             &fallbackSet, 0, nullptr);
                 }
             }
@@ -2785,6 +2819,8 @@ TextureVK* EngineVK::ResolveTexture(std::uint32_t id) const
 void EngineVK::InitDraw(bool clear, PackedColor color)
 {
     Engine::InitDraw(clear, color);
+    if (_textBank)
+        _textBank->StartFrame();
     _drawItems.clear();
     _currentDrawItem = DrawItem{};
     _screenVertices.clear();
@@ -2850,6 +2886,36 @@ void EngineVK::PrepareTriangleTL(const MipInfo& mip, const Poseidon::render::Leg
 {
     _currentDrawItem.backendTextureResourceId = GetOrCreateTextureResourceId(mip._texture);
     _currentDrawItem.specFlags = spec;
+
+    using B = render::Backend;
+    if (render::Has(spec.backend, B::GrassTexture) && _textBank)
+    {
+        TextureVK* grass = _textBank->GetGrassTexture();
+        _lastTexture1ResourceId = grass ? GetOrCreateTextureResourceId(grass) : 1u;
+    }
+    else if (render::Has(spec.backend, B::DetailTexture) && _textBank)
+    {
+        TextureVK* detail = _textBank->GetDetailTexture();
+        _lastTexture1ResourceId = detail ? GetOrCreateTextureResourceId(detail) : 1u;
+    }
+    else if (render::Has(spec.backend, B::SpecularTexture) && _textBank)
+    {
+        TextureVK* spec2 = _textBank->GetSpecularTexture();
+        _lastTexture1ResourceId = spec2 ? GetOrCreateTextureResourceId(spec2) : 1u;
+    }
+    else
+    {
+        _lastTexture1ResourceId = 1u; // white fallback
+    }
+    _currentDrawItem.backendTexture1ResourceId = _lastTexture1ResourceId;
+}
+
+void EngineVK::SetGrassParams(float a1, float a2, float a3, float a4)
+{
+    _grassParam[0] = a1;
+    _grassParam[1] = a2;
+    _grassParam[2] = a3;
+    _grassParam[3] = a4;
 }
 
 void EngineVK::PrepareMeshTL(const LightList& lights, const Matrix4& modelToWorld, const Poseidon::render::LegacySpec& spec)

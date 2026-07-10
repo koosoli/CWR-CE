@@ -52,6 +52,7 @@ class EngineVK : public EngineDummy
     const std::vector<DrawItem>* GetRecordedDraws() const override { return &_drawItems; }
     void PrepareTriangleTL(const MipInfo& mip, const render::LegacySpec& spec) override;
     void PrepareMeshTL(const LightList& lights, const Matrix4& modelToWorld, const render::LegacySpec& spec) override;
+    void SetGrassParams(float a1, float a2, float a3 = 0, float a4 = 0) override;
     AbstractTextBank* TextBank() override;
 
     // --- 2D / HUD / text screen-space draw path ---
@@ -227,6 +228,7 @@ class EngineVK : public EngineDummy
     std::vector<DrawItem> _drawItems;
     DrawItem _currentDrawItem;
     std::uint32_t _lastTexture1ResourceId = 1;
+    float _grassParam[4] = {};
 
     // Per-frame 2D draw accumulation. Vertices/indices are built during the
     // game's Draw2D/DrawPoly/DrawLine calls and emitted in RecordScreenDraws.

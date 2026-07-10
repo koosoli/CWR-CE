@@ -32,9 +32,15 @@ public:
 
     void Compact() override {}
     void Preload() override {}
+    void StartFrame() override;
     void FlushTextures() override;
     void ReleaseAllTextures() override;
     void FlushBank(QFBank* /*bank*/) override {}
+
+    TextureVK* GetDetailTexture() const { return _detail; }
+    TextureVK* GetGrassTexture() const { return _grass; }
+    TextureVK* GetSpecularTexture() const { return _specular; }
+    TextureVK* GetWaterBumpMap() const { return _waterBump; }
 
     // Dynamic RGBA textures (UI overlays, procedural surfaces)
     Texture* CreateDynamic(int w, int h, const void* rgba, uint32_t size, bool mipmap = false) override;
@@ -42,9 +48,15 @@ public:
 
 private:
     int Find(RStringB name) const;
+    void InitDetailTextures();
 
     EngineVK& _engine;
     LLinkArray<TextureVK> _textures;
+
+    Ref<TextureVK> _detail;
+    Ref<TextureVK> _specular;
+    Ref<TextureVK> _grass;
+    Ref<TextureVK> _waterBump;
 };
 
 } // namespace Poseidon

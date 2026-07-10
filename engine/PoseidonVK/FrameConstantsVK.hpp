@@ -24,6 +24,7 @@ struct FrameConstantsVK
     float localLightDiffuse[render::frame::kMaxFrameLocalLights][4] = {};
     float localLightAmbient[render::frame::kMaxFrameLocalLights][4] = {};
     float localLightDirection[render::frame::kMaxFrameLocalLights][4] = {}; // xyz beam dir, w spot flag
+    float grassParams[4] = {};
 };
 
 static_assert(sizeof(GfxMatrix) == 64);
@@ -41,7 +42,8 @@ static_assert(offsetof(FrameConstantsVK, localLightPosition) == 304);
 static_assert(offsetof(FrameConstantsVK, localLightDiffuse) == 432);
 static_assert(offsetof(FrameConstantsVK, localLightAmbient) == 560);
 static_assert(offsetof(FrameConstantsVK, localLightDirection) == 688);
-static_assert(sizeof(FrameConstantsVK) == 816);
+static_assert(offsetof(FrameConstantsVK, grassParams) == 816);
+static_assert(sizeof(FrameConstantsVK) == 832);
 
 inline float ChannelToFloat(std::uint32_t value) noexcept
 {

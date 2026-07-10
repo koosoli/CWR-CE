@@ -130,7 +130,18 @@ smoke-testable.
 - [x] Build complete Vulkan scene pipeline state from the existing render-pass
   descriptors.
 - [x] Render main menu overlays, HUD, lines, polygons, and text via the 2D screen pipeline.
-- [/] Render terrain, models, sky, water, cockpit, and shadow passes in the 3D scene pipeline. (Initial mesh drawing, viewport coordinate flip, and texture loader fixes have landed; rendering details and remaining assets are WIP)
+- [x] Add multitexturing support to the scene pipeline: detail, grass, water-bump, and
+  specular textures loaded from `CfgDetailTextures`, bound to descriptor set 2, and
+  consumed in the fragment shader via per-draw `ShaderFamily` dispatch.
+- [x] Implement all six ShaderFamily branches in `scene.frag.glsl`: Normal (single-texture
+  lit), Shadow (black silhouette), Water (bump-normal specular), Detail (AT2X blend),
+  Grass (rgb modulate + alpha coefficient), and Flat (single-texture lit, no normal).
+- [x] Propagate `SetGrassParams` from engine to `FrameConstantsVK` grass uniform and
+  implement `TextBankVK::InitDetailTextures` / `StartFrame` parity with GL33.
+- [/] Render terrain, models, sky, water, cockpit, and shadow passes in the 3D scene
+  pipeline. (Multitexturing, shader-family dispatch, detail/grass/water textures, and
+  viewport/winding fixes have landed; UV scale (`texMat`) and per-object material alpha
+  in shadow pass are known remaining gaps.)
 - [ ] Add screenshot or frame-observation checks to compare Vulkan against GL33.
 
 ### Phase 3 - Modern Assets And Streaming
