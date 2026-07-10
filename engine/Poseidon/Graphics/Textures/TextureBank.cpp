@@ -590,13 +590,13 @@ void AbstractTextBank::DeleteAllAnimated()
             AnimatedTexture* anim = _animatedTextures[i];
             if (anim)
             {
-                LOG_ERROR(Graphics, "  Leaked AnimatedTexture '%s' refcount=%d", anim->Name(), anim->RefCounter());
+                LOG_ERROR(Graphics, "  Leaked AnimatedTexture '{}' refcount={}", anim->Name(), anim->RefCounter());
                 for (int a = 0; a < anim->Size(); a++)
                 {
                     Texture* animA = anim->Get(a);
                     if (animA)
                     {
-                        LOG_ERROR(Graphics, "    Frame %d: '%s' refcount=%d", a, animA->Name(), animA->RefCounter());
+                        LOG_ERROR(Graphics, "    Frame {}: '{}' refcount={}", a, animA->Name(), animA->RefCounter());
                     }
                 }
             }

@@ -2175,9 +2175,13 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipelineLayout, 0, 1,
                                     &_frameDescriptorSet, 0, nullptr);
         }
+        // The bootstrap triangle is a legacy debugging tool; commenting out the draw call
+        // prevents it from rendering during startup logos, menus, or gameplay, keeping the background clean.
+        /*
         vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                            0, vk::kBootstrapPushConstantsSize, &constants);
         vkCmdDrawIndexed(commandBuffer, kBootstrapTriangleIndexCount, 1, 0, 0, 0);
+        */
     }
     if (_scenePipeline)
     {
@@ -2443,6 +2447,7 @@ void EngineVK::DestroySceneIndexBuffer()
 
 void EngineVK::DestroyScenePipelineLayout()
 {
+    LOG_INFO(Graphics, "Vulkan: DestroyScenePipelineLayout - fragmentModule={}, vertexModule={}, layout={}", (void*)_sceneFragmentModule, (void*)_sceneVertexModule, (void*)_scenePipelineLayout);
     _scenePipelineCache.Destroy(_device);
 
     if (_sceneFragmentModule)
@@ -2473,6 +2478,7 @@ void EngineVK::DestroyScreenPipeline()
 
 void EngineVK::DestroyScreenPipelineLayout()
 {
+    LOG_INFO(Graphics, "Vulkan: DestroyScreenPipelineLayout - fragmentModule={}, vertexModule={}, layout={}", (void*)_screenFragmentModule, (void*)_screenVertexModule, (void*)_screenPipelineLayout);
     if (_device)
     {
         if (_screenFragmentModule)
@@ -2602,6 +2608,7 @@ void EngineVK::PresentBootstrapFrame()
 
 void EngineVK::Shutdown()
 {
+    _fonts.Clear();
     // Destroy the texture bank before the device so GPU images are freed first.
     delete _textBank;
     _textBank = nullptr;

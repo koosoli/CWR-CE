@@ -245,7 +245,7 @@ class EngineVK : public EngineDummy
 
     TextBankVK* _textBank = nullptr;
     std::unordered_map<std::uint32_t, TextureVK*> _textureRegistry;
-    TextureVK* _fallbackWhiteTexture = nullptr;
+    Ref<TextureVK> _fallbackWhiteTexture;
 
     friend class VertexBufferVK;
     friend class TextureVK;

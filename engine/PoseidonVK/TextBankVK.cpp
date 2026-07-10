@@ -78,6 +78,13 @@ void TextBankVK::FlushTextures()
     // Wait for GPU idle before destroying images so in-flight draws finish
     if (_engine._device)
         vkDeviceWaitIdle(_engine._device);
+    // Release all Lock() refcounts before discarding the weak-link array.
+    // LockAllTextures() bumps _refCountLocked on every texture in _textures;
+    // if we clear _textures first the matching Unlock() is never called,
+    // leaving each frame-texture with an extra refcount that survives into
+    // the next lock/flush cycle and ultimately causes the DeleteAllAnimated
+    // assertion to fire on shutdown.
+    UnlockAllTextures();
     _textures.Clear();
     _detail.Free();
     _waterBump.Free();
