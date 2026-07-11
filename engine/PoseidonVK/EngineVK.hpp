@@ -272,6 +272,7 @@ class EngineVK : public EngineDummy
     VkShaderModule _shadowAlphaVertexModule = VK_NULL_HANDLE;
     VkShaderModule _shadowAlphaFragmentModule = VK_NULL_HANDLE;
     vk::BufferVK _shadowVertexBuffer;
+    VkCommandBuffer _shadowCommandBuffer = VK_NULL_HANDLE;
     int _shadowMapRes = 0;
     int _shadowCascades = 0;
     bool _shadowMapActive = false;

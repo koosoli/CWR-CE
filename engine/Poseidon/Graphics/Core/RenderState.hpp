@@ -8,6 +8,7 @@
 #include <Poseidon/Graphics/Core/MatrixConversion.hpp>
 #include <Poseidon/Core/Types.hpp>
 #include <Poseidon/Graphics/Rendering/RenderFlags.hpp>
+#include <Poseidon/Graphics/Rendering/RenderPassDescriptor.hpp>
 #include <cstdint>
 
 // Per-frame camera/environment state — changes once per frame.
@@ -109,6 +110,7 @@ struct DrawItem
 {
     GfxMatrix worldMatrix = {}; // camera-relative world transform
     PassId passId = PassId::Opaque;
+    render::PassKindHint passKindHint = render::PassKindHint::None;
     int bias = 0;                      // z-buffer bias
     render::LegacySpec specFlags = {}; // typed per-object routing / material / backend bits
     void* texture = nullptr;           // Texture* (backend-specific)

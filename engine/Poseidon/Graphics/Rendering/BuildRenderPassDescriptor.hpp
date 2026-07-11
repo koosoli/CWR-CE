@@ -202,6 +202,8 @@ inline RenderPassDescriptor BuildRenderPassDescriptor(const LegacySpec& spec, co
     {
         d.fog = FogMode::Disabled;
         d.cull = CullMode::None;
+        if (Has(backend, Backend::IsAlphaFog))
+            d.pass = PassKind::Sky;
     }
 
     return d;

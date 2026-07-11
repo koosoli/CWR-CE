@@ -501,7 +501,7 @@ bool EngineVK::CreateShadowDepthPipeline()
     rs.sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
     rs.polygonMode = VK_POLYGON_MODE_FILL;
     rs.cullMode    = VK_CULL_MODE_FRONT_BIT; // front-face culling reduces shadow acne
-    rs.frontFace   = VK_FRONT_FACE_CLOCKWISE; // flipped due to negative viewport height
+    rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE; // engine CW after the viewport Y flip
     rs.lineWidth   = 1.0f;
 
     VkPipelineDepthStencilStateCreateInfo ds{};
@@ -780,16 +780,21 @@ void EngineVK::RenderShadowDepthScene(
             std::memcpy(dst + solidBytes, casters.alphaXYZUV, alphaBytes);
     }
 
-    // --- One-shot command buffer ---
-    VkCommandBufferAllocateInfo ai{};
-    ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    ai.commandPool        = _commandPool;
-    ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    ai.commandBufferCount = 1;
-
-    VkCommandBuffer cb = VK_NULL_HANDLE;
-    if (vkAllocateCommandBuffers(_device, &ai, &cb) != VK_SUCCESS)
-        return;
+    // InitDraw has waited for the prior frame fence, so this buffer is no
+    // longer in use. Submit it before the main frame on the same queue rather
+    // than draining the queue with vkQueueWaitIdle every frame.
+    if (_shadowCommandBuffer == VK_NULL_HANDLE)
+    {
+        VkCommandBufferAllocateInfo ai{};
+        ai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        ai.commandPool        = _commandPool;
+        ai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        ai.commandBufferCount = 1;
+        if (vkAllocateCommandBuffers(_device, &ai, &_shadowCommandBuffer) != VK_SUCCESS)
+            return;
+    }
+    VkCommandBuffer cb = _shadowCommandBuffer;
+    vkResetCommandBuffer(cb, 0);
 
     VkCommandBufferBeginInfo bi{};
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -884,15 +889,13 @@ void EngineVK::RenderShadowDepthScene(
 
     vkEndCommandBuffer(cb);
 
-    // Submit and wait -- depth map must be readable before the main CB runs
+    // Same-queue submission order makes the final shadow layout readable by
+    // the main scene command buffer without a CPU-side queue stall.
     VkSubmitInfo si{};
     si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers    = &cb;
     vkQueueSubmit(_graphicsQueue, 1, &si, VK_NULL_HANDLE);
-    vkQueueWaitIdle(_graphicsQueue);
-
-    vkFreeCommandBuffers(_device, _commandPool, 1, &cb);
 
     // Persist cascade data for UpdateShadowFrameConstants
     _shadowCascades  = numCascades;

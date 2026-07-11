@@ -40,6 +40,7 @@ enum class PassKind : std::uint8_t
     CockpitCutout,      // Pass 3: late cutout cockpit / weapon meshes.
     CockpitTransparent, // Pass 3: late transparent cockpit meshes.
     ScreenSpace3D,      // TL / post-world 3D overlay-like meshes (HUD, notebook).
+    Sky,                // Sky dome: camera-centered, no-depth, user-plane clipped.
 };
 
 // Explicit cockpit / first-person routing.  Producers wrap cockpit / overlay

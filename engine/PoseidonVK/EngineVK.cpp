@@ -895,7 +895,8 @@ bool EngineVK::EnsureDrawConstantsBufferCapacity(std::size_t drawCount)
     if (!_physicalDevice || !_device)
         return false;
 
-    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(vk::DrawConstantsByteSize(drawCount));
+    const std::size_t capacity = std::max(drawCount, std::max<std::size_t>(64, _drawConstantsCapacity * 2));
+    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(vk::DrawConstantsByteSize(capacity));
     vkDeviceWaitIdle(_device);
 
     vk::BufferVK replacement;
@@ -909,8 +910,8 @@ bool EngineVK::EnsureDrawConstantsBufferCapacity(std::size_t drawCount)
 
     vk::DestroyBuffer(_device, _drawConstantsBuffer);
     _drawConstantsBuffer = replacement;
-    _drawConstantsCapacity = drawCount;
-    std::vector<vk::DrawConstantsVK> cleared(drawCount);
+    _drawConstantsCapacity = capacity;
+    std::vector<vk::DrawConstantsVK> cleared(capacity);
     vk::UploadMappedBuffer(_drawConstantsBuffer, cleared.data(), vk::DrawConstantsByteSize(cleared.size()));
 
     SetObjectName(VK_OBJECT_TYPE_BUFFER, VulkanObjectHandle(_drawConstantsBuffer.buffer),
@@ -2272,6 +2273,8 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         {
             VkDescriptorSet lastBoundTexDescriptorSet = VK_NULL_HANDLE;
             VkDescriptorSet lastBoundTex1DescriptorSet = VK_NULL_HANDLE;
+            VkBuffer lastBoundVertexBuffer = VK_NULL_HANDLE;
+            VkBuffer lastBoundIndexBuffer = VK_NULL_HANDLE;
             int logEveryN = 100;
             for (const vk::SceneDrawCommandVK& command : _lastSceneDrawCommands)
             {
@@ -2377,14 +2380,18 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                     LOG_DEBUG(Graphics, "  >> meshId={} NOT FOUND, using bootstrap mesh", command.meshId);
                 }
 
-                if (mesh->vertexBuffer)
+                if (mesh->vertexBuffer && mesh->vertexBuffer != lastBoundVertexBuffer)
                 {
                     VkBuffer vertexBuffers[] = {mesh->vertexBuffer};
                     VkDeviceSize offsets[] = {0};
                     vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+                    lastBoundVertexBuffer = mesh->vertexBuffer;
                 }
-                if (mesh->indexBuffer)
+                if (mesh->indexBuffer && mesh->indexBuffer != lastBoundIndexBuffer)
+                {
                     vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+                    lastBoundIndexBuffer = mesh->indexBuffer;
+                }
 
                 // Push the real per-draw world matrix so the shader's fallback
                 // path (used when useDrawConstants is false) also matches. With
@@ -3063,6 +3070,7 @@ void EngineVK::PrepareMeshTL(const LightList& lights, const Matrix4& modelToWorl
     _currentDrawItem.worldMatrix = worldMatrix;
     _currentDrawItem.specFlags = spec;
     _currentDrawItem.bias = GetBias();
+    _currentDrawItem.passKindHint = GetPassKindHint();
 }
 
 void EngineVK::Draw2D(const Draw2DPars& pars, const Rect2DAbs& rect, const Rect2DAbs& clip)

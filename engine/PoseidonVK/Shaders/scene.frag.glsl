@@ -76,6 +76,7 @@ const uint kFamilyWater   = 2u;
 const uint kFamilyDetail  = 3u;
 const uint kFamilyGrass   = 4u;
 const uint kFamilyFlat    = 5u;
+const uint kPassSky       = 10u;
 
 void main()
 {
@@ -155,6 +156,11 @@ void main()
     vec4 c0 = texture(tex0, vTexcoord0);
     vec4 c1 = texture(tex1, vTexcoord1);
 
+    // Landscape::DrawSky clips the lower dome at camera height. Vulkan captures
+    // the mesh directly, so reproduce that user plane in camera-relative space.
+    if (hasDraw && drawConstants.draws[drawIdx].pass == kPassSky && vWorldPos.y < 0.0)
+        discard;
+
     // -----------------------------------------------------------------------
     // Alpha test on c0 (all families)
     // -----------------------------------------------------------------------
@@ -223,7 +229,7 @@ void main()
     // -----------------------------------------------------------------------
     // Cascade shadow map lookup
     // -----------------------------------------------------------------------
-    if (family != kFamilyFlat && frame.shadowCtl.x > 0.5)
+    if (family != kFamilyFlat && family != kFamilyWater && frame.shadowCtl.x > 0.5)
     {
         int nC = int(frame.cascadeCtl.x);
         int omniN = int(frame.cascadeCtl.w);

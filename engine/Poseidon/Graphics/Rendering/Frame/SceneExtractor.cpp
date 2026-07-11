@@ -115,7 +115,7 @@ SceneDraw drawItemToSceneDraw(const DrawItem& item)
     ctx.isIn3DPass = true;
     ctx.isMultitexturing = false;
     ctx.shadowAlphaRef = 0;
-    ctx.passKindHint = render::PassKindHint::None;
+    ctx.passKindHint = item.passKindHint;
 
     out.descriptor = render::BuildRenderPassDescriptor(item.specFlags, ctx);
 
@@ -240,7 +240,24 @@ SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
         for (const auto& item : *draws)
         {
             SceneDraw d = drawItemToSceneDraw(item);
-            bucketDraw(s, item.passId, std::move(d));
+            PassId passId = item.passId;
+            switch (d.descriptor.pass)
+            {
+                case render::PassKind::Sky:
+                    passId = PassId::Sky;
+                    break;
+                case render::PassKind::CockpitOpaque:
+                case render::PassKind::CockpitCutout:
+                case render::PassKind::CockpitTransparent:
+                    passId = PassId::Cockpit;
+                    break;
+                case render::PassKind::ScreenSpace3D:
+                    passId = PassId::ScreenSpace;
+                    break;
+                default:
+                    break;
+            }
+            bucketDraw(s, passId, std::move(d));
         }
     }
 
