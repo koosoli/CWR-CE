@@ -294,7 +294,6 @@ void SmokeSourceVehicle::SimulateExplosion()
                 GSoundScene->SimulateSpeedOfSound(sound);
                 GSoundScene->AddSound(sound);
             }
-            PoseidonAssert(_owner);
             if (IsLocal())
             {
                 GLOB_LAND->ExplosionDammage(_owner, nullptr, GetObject(), Position(), VUp, &type);

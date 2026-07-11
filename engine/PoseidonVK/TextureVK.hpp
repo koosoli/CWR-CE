@@ -3,6 +3,8 @@
 #include <PoseidonVK/BufferVK.hpp>
 #include <Poseidon/Graphics/Textures/TextureBank.hpp>
 
+#include <array>
+
 namespace Poseidon
 {
 class EngineVK;
@@ -48,6 +50,7 @@ public:
     static constexpr std::uint32_t kFallbackResourceId = 1;
 
     VkDescriptorSet GetDescriptorSet() const;
+    VkDescriptorSet GetDescriptorSet(std::uint32_t samplerFilter, std::uint32_t samplerClamp) const;
 
 private:
     bool UploadMips();
@@ -69,6 +72,9 @@ private:
     vk::ImageVK _image;
     VkSampler _sampler = VK_NULL_HANDLE;
     VkDescriptorSet _descriptorSet = VK_NULL_HANDLE;
+    mutable std::array<VkSampler, 8> _samplerVariants = {};
+    mutable std::array<VkDescriptorSet, 8> _descriptorVariants = {};
+    std::uint32_t _baseSamplerKey = 0;
     bool _dynamicImageUploaded = false;
     signed char _alphaClass = -1;
 };

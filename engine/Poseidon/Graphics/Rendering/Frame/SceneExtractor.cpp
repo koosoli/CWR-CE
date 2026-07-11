@@ -7,6 +7,7 @@
 #include <Poseidon/World/Scene/Camera/Camera.hpp>
 #include <Poseidon/Graphics/Rendering/Lighting/Lights.hpp>
 #include <Poseidon/Graphics/Rendering/BuildRenderPassDescriptor.hpp>
+#include <Poseidon/Graphics/Textures/TextureBank.hpp>
 #include <Poseidon/World/World.hpp>
 #include <array>
 #include <string>
@@ -117,7 +118,22 @@ SceneDraw drawItemToSceneDraw(const DrawItem& item)
     ctx.shadowAlphaRef = 0;
     ctx.passKindHint = item.passKindHint;
 
-    out.descriptor = render::BuildRenderPassDescriptor(item.specFlags, ctx);
+    render::LegacySpec spec = item.specFlags;
+    if (item.texture && render::Has(spec.backend, render::Backend::IsAlpha) &&
+        !render::Has(spec.backend, render::Backend::IsAlphaFog))
+    {
+        const auto alphaClass = static_cast<Texture*>(item.texture)->GetAlphaClass();
+        if (alphaClass == AlphaStats::Opaque)
+        {
+            spec.backend &= ~render::Backend::IsAlpha;
+        }
+        else if (alphaClass == AlphaStats::Cutout)
+        {
+            spec.backend &= ~render::Backend::IsAlpha;
+            spec.backend |= render::Backend::IsTransparent;
+        }
+    }
+    out.descriptor = render::BuildRenderPassDescriptor(spec, ctx);
 
     // Mesh resource + index range — only TL draws carry buffer info; queue
     // draws set isTLDraw=false and don't reference a mesh.  The capture
@@ -245,6 +261,27 @@ SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
             {
                 case render::PassKind::Sky:
                     passId = PassId::Sky;
+                    break;
+                case render::PassKind::WorldOpaque:
+                    passId = PassId::Opaque;
+                    break;
+                case render::PassKind::WorldCutout:
+                    passId = PassId::Cutout;
+                    break;
+                case render::PassKind::WorldTransparent:
+                    passId = PassId::Transparent;
+                    break;
+                case render::PassKind::WorldShadow:
+                    passId = PassId::Shadow;
+                    break;
+                case render::PassKind::WorldLight:
+                    passId = PassId::Light;
+                    break;
+                case render::PassKind::WorldWater:
+                    passId = PassId::Water;
+                    break;
+                case render::PassKind::SurfaceOverlay:
+                    passId = PassId::OnSurface;
                     break;
                 case render::PassKind::CockpitOpaque:
                 case render::PassKind::CockpitCutout:

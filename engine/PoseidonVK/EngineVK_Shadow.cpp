@@ -43,6 +43,16 @@ const char* VkResultName(VkResult result)
         default:                            return "VkResult";
     }
 }
+
+bool RecreateSignaledShadowFence(VkDevice device, VkFence& fence)
+{
+    if (fence)
+        vkDestroyFence(device, fence, nullptr);
+    VkFenceCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    return vkCreateFence(device, &info, nullptr, &fence) == VK_SUCCESS;
+}
 } // namespace
 } // namespace Poseidon
 
@@ -744,6 +754,9 @@ void EngineVK::RenderShadowDepthScene(
     if (!_shadowTuning.enabled || !_device || !_commandPool || !_graphicsQueue)
         return;
 
+    if (_shadowInFlight)
+        vkWaitForFences(_device, 1, &_shadowInFlight, VK_TRUE, UINT64_MAX);
+
     numCascades = std::min(numCascades, kShadowCascades);
     if (numCascades <= 0)
         return;
@@ -887,7 +900,8 @@ void EngineVK::RenderShadowDepthScene(
         vkCmdEndRenderPass(cb);
     }
 
-    vkEndCommandBuffer(cb);
+    if (vkEndCommandBuffer(cb) != VK_SUCCESS)
+        return;
 
     // Same-queue submission order makes the final shadow layout readable by
     // the main scene command buffer without a CPU-side queue stall.
@@ -895,7 +909,16 @@ void EngineVK::RenderShadowDepthScene(
     si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers    = &cb;
-    vkQueueSubmit(_graphicsQueue, 1, &si, VK_NULL_HANDLE);
+    if (_shadowInFlight)
+        vkResetFences(_device, 1, &_shadowInFlight);
+    const VkResult submitResult = vkQueueSubmit(_graphicsQueue, 1, &si, _shadowInFlight);
+    if (submitResult != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "VK shadow: queue submit failed: {}", VkResultName(submitResult));
+        if (_shadowInFlight)
+            RecreateSignaledShadowFence(_device, _shadowInFlight);
+        return;
+    }
 
     // Persist cascade data for UpdateShadowFrameConstants
     _shadowCascades  = numCascades;

@@ -101,14 +101,26 @@ TextureVK::~TextureVK()
     // stall is acceptable here.
     if (dev)
         vkDeviceWaitIdle(dev);
-    if (dev && _descriptorSet && _engine._textureDescriptorPool)
+    if (dev && _engine._textureDescriptorPool)
     {
-        vkFreeDescriptorSets(dev, _engine._textureDescriptorPool, 1, &_descriptorSet);
+        for (VkDescriptorSet& descriptorSet : _descriptorVariants)
+        {
+            if (descriptorSet)
+                vkFreeDescriptorSets(dev, _engine._textureDescriptorPool, 1, &descriptorSet);
+        }
+        if (_descriptorSet)
+            vkFreeDescriptorSets(dev, _engine._textureDescriptorPool, 1, &_descriptorSet);
         _descriptorSet = VK_NULL_HANDLE;
     }
-    if (dev && _sampler)
+    if (dev)
     {
-        vkDestroySampler(dev, _sampler, nullptr);
+        for (VkSampler& sampler : _samplerVariants)
+        {
+            if (sampler)
+                vkDestroySampler(dev, sampler, nullptr);
+        }
+        if (_sampler)
+            vkDestroySampler(dev, _sampler, nullptr);
         _sampler = VK_NULL_HANDLE;
     }
     vk::DestroyImage(dev, _image);
@@ -425,6 +437,61 @@ VkDescriptorSet TextureVK::GetDescriptorSet() const
     if (_engine._fallbackWhiteTexture)
         return _engine._fallbackWhiteTexture->_descriptorSet;
     return VK_NULL_HANDLE;
+}
+
+VkDescriptorSet TextureVK::GetDescriptorSet(std::uint32_t samplerFilter, std::uint32_t samplerClamp) const
+{
+    const std::uint32_t key = ((samplerFilter & 1u) << 2) | (samplerClamp & 3u);
+    if (!_image.view || !_engine._device || !_engine._textureDescriptorPool)
+        return GetDescriptorSet();
+    if (key == _baseSamplerKey)
+        return GetDescriptorSet();
+    if (_descriptorVariants[key])
+        return _descriptorVariants[key];
+
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = samplerFilter == 1u ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+    samplerInfo.minFilter = samplerInfo.magFilter;
+    samplerInfo.mipmapMode = samplerFilter == 1u ? VK_SAMPLER_MIPMAP_MODE_NEAREST : VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = (samplerClamp & 1u) ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = (samplerClamp & 2u) ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = samplerInfo.addressModeV;
+    samplerInfo.maxLod = static_cast<float>(_nMipmaps);
+
+    VkSampler sampler = VK_NULL_HANDLE;
+    if (vkCreateSampler(_engine._device, &samplerInfo, nullptr, &sampler) != VK_SUCCESS)
+        return GetDescriptorSet();
+
+    VkDescriptorSetAllocateInfo allocateInfo{};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocateInfo.descriptorPool = _engine._textureDescriptorPool;
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &_engine._textureDescriptorSetLayout;
+
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(_engine._device, &allocateInfo, &descriptorSet) != VK_SUCCESS)
+    {
+        vkDestroySampler(_engine._device, sampler, nullptr);
+        return GetDescriptorSet();
+    }
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageView = _image.view;
+    imageInfo.sampler = sampler;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = descriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(_engine._device, 1, &write, 0, nullptr);
+
+    _samplerVariants[key] = sampler;
+    _descriptorVariants[key] = descriptorSet;
+    return descriptorSet;
 }
 
 // ---------------------------------------------------------------------------

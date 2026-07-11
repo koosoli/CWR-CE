@@ -116,6 +116,7 @@ Texture* TextBankVK::CreateDynamic(int w, int h, const void* rgba, uint32_t size
     tex->_w = w;
     tex->_h = h;
     tex->_nMipmaps = 1;
+    tex->_baseSamplerKey = 3; // linear, clamp U and V
     tex->_mipmaps[0]._w = w;
     tex->_mipmaps[0]._h = h;
 

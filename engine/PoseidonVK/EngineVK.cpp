@@ -1039,12 +1039,12 @@ bool EngineVK::CreateTextureDescriptorPool()
 {
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = 2048; // max textures
+    poolSize.descriptorCount = 8192; // scene textures plus per-sampler variants
 
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets = 2048;
+    poolInfo.maxSets = 8192;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes = &poolSize;
 
@@ -2083,6 +2083,13 @@ bool EngineVK::CreateSyncObjects()
     }
     SetObjectName(VK_OBJECT_TYPE_FENCE, VulkanObjectHandle(_inFlight), "PoseidonVK Frame Fence");
 
+    if (!_shadowInFlight && vkCreateFence(_device, &fenceInfo, nullptr, &_shadowInFlight) != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: failed to create shadow fence");
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_FENCE, VulkanObjectHandle(_shadowInFlight), "PoseidonVK Shadow Fence");
+
     if (_renderFinished.size() == _swapchainImages.size() &&
         std::all_of(_renderFinished.begin(), _renderFinished.end(), [](VkSemaphore semaphore)
                     { return semaphore != VK_NULL_HANDLE; }))
@@ -2316,7 +2323,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                     TextureVK* tex = ResolveTexture(texId);
                     if (tex)
                     {
-                        texDescriptorSet = tex->GetDescriptorSet();
+                        texDescriptorSet = tex->GetDescriptorSet(draw.samplerFilter, draw.samplerClamp);
                         texFound = true;
                     }
                 }
@@ -2329,7 +2336,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
 
                 if (texDescriptorSet == VK_NULL_HANDLE && _fallbackWhiteTexture)
                 {
-                    texDescriptorSet = _fallbackWhiteTexture->GetDescriptorSet();
+                    texDescriptorSet = _fallbackWhiteTexture->GetDescriptorSet(draw.samplerFilter, draw.samplerClamp);
                 }
 
                 if (texDescriptorSet != VK_NULL_HANDLE && texDescriptorSet != lastBoundTexDescriptorSet)
@@ -2346,12 +2353,12 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                 {
                     TextureVK* tex = ResolveTexture(texId1);
                     if (tex)
-                        tex1DescriptorSet = tex->GetDescriptorSet();
+                        tex1DescriptorSet = tex->GetDescriptorSet(draw.samplerFilter, draw.samplerClamp);
                 }
 
                 if (tex1DescriptorSet == VK_NULL_HANDLE && _fallbackWhiteTexture)
                 {
-                    tex1DescriptorSet = _fallbackWhiteTexture->GetDescriptorSet();
+                    tex1DescriptorSet = _fallbackWhiteTexture->GetDescriptorSet(draw.samplerFilter, draw.samplerClamp);
                 }
 
                 if (tex1DescriptorSet != VK_NULL_HANDLE && tex1DescriptorSet != lastBoundTex1DescriptorSet)
@@ -2739,6 +2746,11 @@ void EngineVK::Shutdown()
             vkDestroyFence(_device, _inFlight, nullptr);
             _inFlight = VK_NULL_HANDLE;
         }
+        if (_shadowInFlight)
+        {
+            vkDestroyFence(_device, _shadowInFlight, nullptr);
+            _shadowInFlight = VK_NULL_HANDLE;
+        }
         if (_imageAvailable)
         {
             vkDestroySemaphore(_device, _imageAvailable, nullptr);
@@ -3019,6 +3031,7 @@ void EngineVK::EndMeshTL(const Shape& /*sMesh*/)
 void EngineVK::PrepareTriangleTL(const MipInfo& mip, const Poseidon::render::LegacySpec& spec)
 {
     _currentDrawItem.backendTextureResourceId = GetOrCreateTextureResourceId(mip._texture);
+    _currentDrawItem.texture = mip._texture;
     _currentDrawItem.specFlags = spec;
 
     using B = render::Backend;
