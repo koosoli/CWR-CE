@@ -11,6 +11,9 @@
 #include <Poseidon/Graphics/Rendering/Font/Pactext.hpp>
 #include <Poseidon/Foundation/Framework/Log.hpp>
 #include <Poseidon/Graphics/Textures/LooseTextures.hpp>
+#include <Poseidon/Graphics/Textures/PAADecoder.hpp>
+#include <Poseidon/IO/FileServer.hpp>
+#include <Poseidon/Core/Global.hpp>
 
 #include <algorithm>
 #include <cstring>
@@ -33,8 +36,7 @@ struct FormatInfo
 // DstFormatVK: maps a texture's source (file) format to the in-memory
 // decode target that TextureVK will upload to Vulkan.
 // Mirrors TextureGL33_Init::DstFormat() but without GL-specific hardware
-// capability checks — Vulkan natively supports all 16-bit, 32-bit, and
-// DXT formats, so only the P8 palette-expand requires a conversion.
+// capability checks. P8 palette-expand requires a conversion.
 //
 // NOTE: PacARGB4444 and PacARGB1555 stay at their native format here so that
 // GetMipmapData / LoadPaaBin16's '_sFormat == _dFormat' assertion passes.
@@ -75,6 +77,11 @@ FormatInfo PacFormatToVk(PacFormat fmt)
 static std::uint32_t s_nextTextureId = TextureVK::kFallbackResourceId + 1;
 } // namespace
 
+std::uint32_t TextureVK::AllocateResourceId() noexcept
+{
+    return s_nextTextureId++;
+}
+
 // ---------------------------------------------------------------------------
 // Ctor / dtor
 // ---------------------------------------------------------------------------
@@ -113,11 +120,11 @@ TextureVK::~TextureVK()
 bool TextureVK::Init(RStringB name)
 {
     SetName(name);
-    _resourceId = s_nextTextureId++;
+    _resourceId = AllocateResourceId();
 
     // Resolve loose/mod texture overrides exactly as GL33 does (TextureGL33_Init.cpp:171).
     // Without this, modded textures and any path redirects registered with the loose
-    // texture system are silently ignored, falling through to the fallback white texture.
+    // texture system are silently ignored, falling through to the fallback black texture.
     RString resolved = Poseidon::Graphics::ResolveLooseTexturePath(name);
 
     ITextureSourceFactory* factory = SelectTextureSourceFactory(resolved);
@@ -132,6 +139,10 @@ bool TextureVK::Init(RStringB name)
     _src = factory->Create(resolved, _mipmaps, MAX_MIPMAPS);
     if (!_src)
         return true;
+
+    const PacFormat sourceFormat = _src->GetFormat();
+    if (sourceFormat == PacARGB4444 || sourceFormat == PacAI88 || sourceFormat == PacARGB8888)
+        _src->ForceAlpha();
 
     // Count usable mip levels (stop at 2×2 minimum — mirrors TextureDummy)
     const int totalMips = _src->GetMipmapCount();
@@ -161,7 +172,7 @@ bool TextureVK::Init(RStringB name)
     // CHANNEL-ORDER NOTE: PacARGB4444 and PacARGB1555 keep their native format
     // so that GetMipmapData / LoadPaaBin16's '_sFormat==_dFormat' assertion
     // passes. UploadMips will then transcode the raw 16-bit pixels to RGBA8.
-    _nativeSrcFormat = _src->GetFormat();
+    _nativeSrcFormat = sourceFormat;
     const PacFormat uploadFmt = DstFormatVK(_nativeSrcFormat);
     // Use uploadFmt (not _nativeSrcFormat) for the VkImage format lookup so that
     // palette-expand paths (PacP8 → PacARGB1555) get the right VkFormat and the
@@ -271,7 +282,7 @@ bool TextureVK::UploadMips()
     //
     // PacARGB4444 raw bytes: A4R4G4B4 (bits 15-12=A, 11-8=R, 7-4=G, 3-0=B)
     // PacARGB1555 raw bytes: A1R5G5B5 (bit15=A, 14-10=R, 9-5=G, 4-0=B)
-    // PacARGB8888 raw bytes: [A,R,G,B] byte order (ARGB stored big-endian)
+    // PacARGB8888 raw bytes: [B,G,R,A] on the supported little-endian target.
     // None of these map correctly to any Vulkan format without conversion.
     // GL33 uses GL_BGRA+GL_UNSIGNED_SHORT/INT_*_REV for the byte-swap; we
     // perform the equivalent conversion in software during UploadMips.
@@ -324,7 +335,7 @@ bool TextureVK::UploadMips()
         // Transcode pixels to Vulkan-compatible RGBA8 layout when required.
         //   ARGB4444: bits 15-12=A, 11-8=R, 7-4=G, 3-0=B  → [R8,G8,B8,A8]
         //   ARGB1555: bit15=A, 14-10=R, 9-5=G, 4-0=B       → [R8,G8,B8,A8]
-        //   ARGB8888: raw bytes [A,R,G,B]                   → [R8,G8,B8,A8]
+        //   ARGB8888: raw bytes [B,G,R,A]                   → [R8,G8,B8,A8]
         // All output as VK_FORMAT_R8G8B8A8_UNORM.
         std::vector<char> transcodedData;
         const void* uploadPtr = pixelData.data();
@@ -380,15 +391,15 @@ bool TextureVK::UploadMips()
                     dst8[p * 4 + 3] = alpha;
                 }
             }
-            else // transcode8888: raw bytes [A,R,G,B] → [R,G,B,A]
+            else // transcode8888: raw bytes [B,G,R,A] → [R,G,B,A]
             {
                 const uint8_t* src8 = reinterpret_cast<const uint8_t*>(pixelData.data());
                 for (std::size_t p = 0; p < pixelCount; ++p)
                 {
-                    dst8[p * 4 + 0] = src8[p * 4 + 1]; // R
-                    dst8[p * 4 + 1] = src8[p * 4 + 2]; // G
-                    dst8[p * 4 + 2] = src8[p * 4 + 3]; // B
-                    dst8[p * 4 + 3] = src8[p * 4 + 0]; // A
+                    dst8[p * 4 + 0] = src8[p * 4 + 2]; // R
+                    dst8[p * 4 + 1] = src8[p * 4 + 1]; // G
+                    dst8[p * 4 + 2] = src8[p * 4 + 0]; // B
+                    dst8[p * 4 + 3] = src8[p * 4 + 3]; // A
                 }
             }
             uploadPtr = transcodedData.data();
@@ -422,6 +433,63 @@ VkDescriptorSet TextureVK::GetDescriptorSet() const
 bool TextureVK::IsTransparent() const { return _src && _src->IsTransparent(); }
 bool TextureVK::IsAlpha() const { return _src && _src->IsAlpha(); }
 Color TextureVK::GetColor() { return _src ? _src->GetAverageColor() : HBlack; }
+
+Color TextureVK::GetPixel(int level, float u, float v) const
+{
+    if (!_src || level < 0 || level >= _nMipmaps)
+        return HWhite;
+
+    const PacLevelMem& mip = _mipmaps[level];
+    const std::size_t dataSize = static_cast<std::size_t>(mip._pitch) * mip._h;
+    if (dataSize == 0)
+        return HWhite;
+
+    std::vector<char> pixels(dataSize);
+    if (!_src->GetMipmapData(pixels.data(), mip, level))
+        return HWhite;
+    return mip.GetPixel(pixels.data(), u, v);
+}
+
+AlphaStats::Kind TextureVK::GetAlphaClass()
+{
+    if (_alphaClass >= 0)
+        return static_cast<AlphaStats::Kind>(_alphaClass);
+
+    AlphaStats::Kind kind = AlphaStats::Opaque;
+    if (_src)
+    {
+        const bool hasAlpha = _src->IsAlpha();
+        const bool chroma = _src->IsTransparent();
+        const bool oneBit = _src->GetFormat() == PacDXT1;
+        AlphaStats decoded;
+        const AlphaStats* decodedPtr = nullptr;
+
+        if (hasAlpha && !oneBit)
+        {
+            QIFStream in;
+            GFileServer->Open(in, Name());
+            const int size = in.fail() ? 0 : in.rest();
+            if (size > 0)
+            {
+                std::vector<char> fileData(static_cast<std::size_t>(size));
+                in.read(fileData.data(), size);
+                const char* name = Name();
+                const std::size_t len = name ? std::strlen(name) : 0;
+                const bool isPaa = len >= 4 && (name[len - 1] == 'a' || name[len - 1] == 'A');
+                const DecodedImage image = DecodePAABuffer(fileData.data(), fileData.size(), isPaa);
+                if (image.valid())
+                {
+                    decoded = ClassifyAlpha(image.rgba.data(), image.rgba.size() / 4);
+                    decodedPtr = &decoded;
+                }
+            }
+        }
+        kind = ClassifyTextureAlpha(hasAlpha, chroma, oneBit, decodedPtr);
+    }
+
+    _alphaClass = static_cast<signed char>(kind);
+    return kind;
+}
 
 } // namespace Poseidon
 

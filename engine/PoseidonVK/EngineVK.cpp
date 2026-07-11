@@ -469,15 +469,14 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
 
     LOG_INFO(Graphics, "Vulkan: bootstrap initialized {}x{} mode={} graphics_queue={} present_queue={}", _width,
              _height, static_cast<int>(_windowMode), _graphicsQueueFamily, _presentQueueFamily);
-    LOG_WARN(Graphics, "Vulkan: scene raster parity is in progress; 3D scene draws use the real camera transform "
-                       "and 2D/HUD/text draws go through the screen pipeline. Sky/water/shadow passes are not yet "
-                       "implemented.");
+    LOG_WARN(Graphics, "Vulkan: scene raster parity is in progress; water and some legacy clipped geometry may differ "
+                       "from the GL33 renderer.");
 
     _textBank = new TextBankVK(*this);
 
-    // Create and register fallback white texture
-    uint32_t whitePixel = 0xFFFFFFFF;
-    _fallbackWhiteTexture = static_cast<TextureVK*>(_textBank->CreateDynamic(1, 1, &whitePixel, 4, false));
+    // Create and register fallback grey texture (neutral grey for missing textures)
+    uint32_t fallbackPixel = 0xFF808080;
+    _fallbackWhiteTexture = static_cast<TextureVK*>(_textBank->CreateDynamic(1, 1, &fallbackPixel, 4, false));
     if (_fallbackWhiteTexture)
     {
         UnregisterTexture(_fallbackWhiteTexture);
@@ -523,6 +522,25 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
     _lastDrawConstants = vk::BuildDrawConstants(frame);
     _lastSceneDrawCommands = vk::BuildSceneDrawCommands(_lastDrawConstants);
     _hasFrameConstants = true;
+
+    // Log summary once per second (every 60 frames) to avoid console spam
+    {
+        static int s_logFrame = 0;
+        if (++s_logFrame % 60 == 1)
+        {
+            std::string passSummary;
+            for (const auto& p : frame.passes)
+            {
+                if (!passSummary.empty()) passSummary += " ";
+                passSummary += render::frame::FramePassKindName(p.kind);
+                passSummary += "=" + std::to_string(p.draws.size());
+            }
+            LOG_INFO(Graphics, "FramePlan: {} | {} draws, {} cmds, {} meshes, {} texs",
+                     passSummary, _lastDrawConstants.size(), _lastSceneDrawCommands.size(),
+                     _meshRegistry.Size(), _textureRegistry.size());
+        }
+    }
+
     UploadFrameConstants();
     UploadDrawConstants();
 }
@@ -2254,10 +2272,23 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         {
             VkDescriptorSet lastBoundTexDescriptorSet = VK_NULL_HANDLE;
             VkDescriptorSet lastBoundTex1DescriptorSet = VK_NULL_HANDLE;
+            int logEveryN = 100;
             for (const vk::SceneDrawCommandVK& command : _lastSceneDrawCommands)
             {
                 vk::PipelineKeyVK key;
                 const vk::DrawConstantsVK& draw = _lastDrawConstants[command.drawIndex];
+
+                // Log first few draws and any with missing resources
+                static std::uint32_t s_loggedDrawIdx = 0;
+                bool logThis = (s_loggedDrawIdx < 20);
+                ++s_loggedDrawIdx;
+                if (logThis)
+                {
+                    LOG_DEBUG(Graphics, "SceneDraw[{}]: pass={} meshId={} tex0={} idxRange={}+{}",
+                              s_loggedDrawIdx - 1, draw.pass, draw.meshId, draw.textureIds[0],
+                              draw.indexBegin, draw.indexCount);
+                }
+
                 key.cull = static_cast<render::CullMode>(draw.cull);
                 key.frontFace = static_cast<render::FrontFaceMode>(draw.frontFace);
                 key.depth = static_cast<render::DepthMode>(draw.depth);
@@ -2276,11 +2307,21 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                 // Bind texture descriptor set (Set 1)
                 VkDescriptorSet texDescriptorSet = VK_NULL_HANDLE;
                 std::uint32_t texId = draw.textureIds[0];
+                bool texFound = false;
                 if (texId != 0)
                 {
                     TextureVK* tex = ResolveTexture(texId);
                     if (tex)
+                    {
                         texDescriptorSet = tex->GetDescriptorSet();
+                        texFound = true;
+                    }
+                }
+
+                if (!texFound && logThis)
+                {
+                    LOG_DEBUG(Graphics, "  >> tex0 id={} NOT FOUND in registry ({} entries), using fallback",
+                              texId, _textureRegistry.size());
                 }
 
                 if (texDescriptorSet == VK_NULL_HANDLE && _fallbackWhiteTexture)
@@ -2321,10 +2362,20 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                 // uploads land, most commands resolve to the bring-up quad; the
                 // resolve-and-bind path itself is exercised live against real ids.
                 const vk::MeshResourcesVK* mesh = _meshRegistry.Resolve(command.meshId);
-                if (!mesh || !mesh->IsValid())
+                bool meshFound = (mesh && mesh->IsValid());
+                if (!meshFound)
                     mesh = _meshRegistry.Resolve(_bootstrapMeshId);
                 if (!mesh || !mesh->IsValid())
+                {
+                    if (logThis)
+                        LOG_DEBUG(Graphics, "  >> meshId={} NOT FOUND (bootstrap={}, valid={}) SKIPPING",
+                                  command.meshId, _bootstrapMeshId, mesh ? mesh->IsValid() : false);
                     continue;
+                }
+                if (!meshFound && logThis)
+                {
+                    LOG_DEBUG(Graphics, "  >> meshId={} NOT FOUND, using bootstrap mesh", command.meshId);
+                }
 
                 if (mesh->vertexBuffer)
                 {
@@ -2843,11 +2894,10 @@ std::uint32_t GetOrCreateTextureResourceId(Texture* tex)
         return tvk->GetResourceId();
     // Fallback for dummy/unknown textures — assign a stable ID per pointer.
     static std::unordered_map<Texture*, std::uint32_t> s_texToId;
-    static std::uint32_t s_nextId = TextureVK::kFallbackResourceId + 1;
     auto it = s_texToId.find(tex);
     if (it != s_texToId.end())
         return it->second;
-    std::uint32_t id = s_nextId++;
+    const std::uint32_t id = TextureVK::AllocateResourceId();
     s_texToId[tex] = id;
     return id;
 }
@@ -2887,6 +2937,10 @@ TextureVK* EngineVK::ResolveTexture(std::uint32_t id) const
 
 void EngineVK::InitDraw(bool clear, PackedColor color)
 {
+    // Dynamic mesh updates and buffer releases happen during draw preparation.
+    // Do not write or destroy memory the previous submitted frame still reads.
+    if (_device && _inFlight)
+        vkWaitForFences(_device, 1, &_inFlight, VK_TRUE, UINT64_MAX);
     Engine::InitDraw(clear, color);
     if (_textBank)
         _textBank->StartFrame();
@@ -2908,9 +2962,13 @@ VertexBuffer* EngineVK::CreateVertexBuffer(const Shape& src, VBType type)
 
 void EngineVK::DrawSectionTL(const Shape& sMesh, int beg, int end)
 {
-    auto* buf = static_cast<VertexBufferVK*>(sMesh.GetVertexBuffer());
+    auto* buf = dynamic_cast<VertexBufferVK*>(sMesh.GetVertexBuffer());
     if (!buf || buf->_sections.empty())
+    {
+        if (!buf)
+            LOG_DEBUG(Graphics, "Vulkan: DrawSectionTL - vertex buffer is not VertexBufferVK, skipping draw");
         return;
+    }
 
     PoseidonAssert(end > beg);
     PoseidonAssert(end <= static_cast<int>(buf->_sections.size()));

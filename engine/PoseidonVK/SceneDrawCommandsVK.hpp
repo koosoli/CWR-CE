@@ -2,6 +2,8 @@
 
 #include <PoseidonVK/DrawConstantsVK.hpp>
 
+#include <Poseidon/Graphics/Rendering/RenderPassDescriptor.hpp>
+
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -16,10 +18,18 @@ struct SceneDrawCommandVK
     std::uint32_t meshId = 0;
     std::uint32_t firstIndex = 0;
     std::uint32_t indexCount = 0;
+    std::uint32_t pass = 0;
 };
 
 inline bool IsDrawableSceneDraw(const DrawConstantsVK& draw) noexcept
 {
+    // Skip shadow-map and light-volume passes — they are handled separately
+    // (RenderShadowDepthScene for shadow casters; light volumes are not yet
+    // implemented). Including them in the main scene loop would render
+    // shadow-caster meshes as regular opaque geometry.
+    const auto pass = static_cast<render::PassKind>(draw.pass);
+    if (pass == render::PassKind::WorldShadow || pass == render::PassKind::WorldLight)
+        return false;
     return draw.meshId != 0 && draw.indexCount != 0;
 }
 
@@ -40,6 +50,7 @@ BuildSceneDrawCommands(const std::vector<DrawConstantsVK>& draws,
         command.meshId = draw.meshId;
         command.firstIndex = draw.indexBegin;
         command.indexCount = draw.indexCount;
+        command.pass = draw.pass;
         commands.push_back(command);
     }
     return commands;

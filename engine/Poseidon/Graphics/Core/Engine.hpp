@@ -349,7 +349,7 @@ class Engine : public IGraphicsEngine
     void CCALL ShowMessage(int timeMs, const char* fmt, ...);
 
     void SetFogColor(ColorVal fogColor);
-    ColorVal FogColor() { return _fogColor; }
+    ColorVal FogColor() const { return _fogColor; }
 
     void SetShadowFactor(int shadowFactor) { _shadowFactor = shadowFactor; }
     int GetShadowFactor() const { return _shadowFactor; }

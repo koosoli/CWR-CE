@@ -253,7 +253,7 @@ void main()
                 if (w <= 0.0) continue;
                 vec4 cp = frame.cascadeVP[c] * vec4(vWorldPos, 1.0);
                 vec3 sc = cp.xyz / cp.w;
-                vec2 suv = sc.xy * 0.5 + 0.5;
+                vec2 suv = vec2(sc.x * 0.5 + 0.5, 0.5 - sc.y * 0.5);
                 if (suv.x > 0.0 && suv.x < 1.0 && suv.y > 0.0 && suv.y < 1.0 && sc.z > 0.0 && sc.z < 1.0)
                 {
                     float bias = frame.cascadeCtl.z * float(c + 1) * float(c + 1);

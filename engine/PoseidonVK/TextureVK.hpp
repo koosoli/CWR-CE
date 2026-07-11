@@ -24,6 +24,7 @@ public:
 
     // Opaque ID used by the frame extractor (parallel to TextureGL33::GetResourceId).
     std::uint32_t GetResourceId() const noexcept { return _resourceId; }
+    static std::uint32_t AllocateResourceId() noexcept;
 
     // --- Texture virtuals ---
     int AWidth(int /*level*/ = 0) const override { return _w; }
@@ -31,10 +32,11 @@ public:
     int ANMipmaps() const override { return _nMipmaps; }
     void ASetNMipmaps(int) override {}
 
-    Color GetPixel(int, float, float) const override { return HBlack; }
+    Color GetPixel(int level, float u, float v) const override;
     Color GetColor() override;
     bool IsTransparent() const override;
     bool IsAlpha() const override;
+    AlphaStats::Kind GetAlphaClass() override;
 
     void SetMaxSize(int sz) override { _maxSize = sz; }
     int AMaxSize() const override { return _maxSize; }
@@ -67,6 +69,8 @@ private:
     vk::ImageVK _image;
     VkSampler _sampler = VK_NULL_HANDLE;
     VkDescriptorSet _descriptorSet = VK_NULL_HANDLE;
+    bool _dynamicImageUploaded = false;
+    signed char _alphaClass = -1;
 };
 
 } // namespace Poseidon

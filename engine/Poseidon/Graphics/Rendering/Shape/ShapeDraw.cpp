@@ -84,7 +84,15 @@ void Shape::Draw(class IAnimator* matSource, const LightList& lights, ClipFlags 
 
     Engine* engine = GEngine;
 
-    bool tlAble = ((spec & OnSurface) == 0 || engine->GetTLOnSurface()) && (clip & ClipUser0) == 0;
+    const bool vkSkyCapture = engine->ConsumesRenderFramePlan() &&
+                              render::Has(render::SplitLegacy(spec).backend, render::Backend::NoZBuf);
+    // The Vulkan backend currently captures only T&L draws. The sky dome is
+    // user-clipped by the legacy path, which otherwise drops it into Vulkan's
+    // unimplemented queue renderer. Terrain subsequently overwrites the lower
+    // dome, so capturing its mesh restores the visible sky without changing
+    // the legacy renderer's clipping behavior.
+    bool tlAble = ((spec & OnSurface) == 0 || engine->GetTLOnSurface()) &&
+                  ((clip & ClipUser0) == 0 || vkSkyCapture);
 
     if (engine->GetTL() && EnableHWTLState && tlAble && _buffer)
     {
@@ -341,10 +349,18 @@ void LODShape::OptimizeRendering()
             switch (globalLight)
             {
                 case ClipLightCloud:
-                case ClipLightSky:
                 case ClipLightStars:
                 case ClipLightLine:
                     optimizeHW = optimizeSSE = false;
+                    break;
+                case ClipLightSky:
+                    // The legacy queue path used for sky geometry is not yet
+                    // captured by frame-plan renderers. Keep the historical
+                    // non-HWTL route for legacy backends, but build a mesh for
+                    // Vulkan so the existing T&L capture path can render it.
+                    if (!GEngine->ConsumesRenderFramePlan())
+                        optimizeHW = optimizeSSE = false;
+                    break;
             }
             if (level->Special() & (IsLight | OnSurface))
             {

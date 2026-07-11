@@ -10,6 +10,10 @@ namespace Poseidon
 
 VertexBufferVK::~VertexBufferVK()
 {
+    // The prior frame can still reference this mesh from the main command
+    // buffer when a shape is unloaded or its HWTL setting changes.
+    if (_engine && _engine->_device && _engine->_inFlight)
+        vkWaitForFences(_engine->_device, 1, &_engine->_inFlight, VK_TRUE, UINT64_MAX);
     if (_engine)
     {
         _engine->_meshRegistry.Unregister(_meshResourceId);

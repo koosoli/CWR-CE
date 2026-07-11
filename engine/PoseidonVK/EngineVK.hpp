@@ -228,7 +228,7 @@ class EngineVK : public EngineDummy
     vk::MeshRegistryVK _meshRegistry;
     std::uint32_t _bootstrapMeshId = 0;
     std::size_t _drawConstantsCapacity = 0;
-    VkClearColorValue _clearColor{{0.04f, 0.09f, 0.16f, 1.0f}};
+    VkClearColorValue _clearColor{{0.0f, 0.0f, 0.0f, 1.0f}};
     int _width = 1;
     int _height = 1;
     int _bitsPerPixel = 32;
@@ -255,7 +255,7 @@ class EngineVK : public EngineDummy
 
     TextBankVK* _textBank = nullptr;
     std::unordered_map<std::uint32_t, TextureVK*> _textureRegistry;
-    Ref<TextureVK> _fallbackWhiteTexture;
+    Ref<TextureVK> _fallbackWhiteTexture; // 1x1 neutral-grey fallback for missing textures
 
     // Shadow resources
     static constexpr int kShadowCascades = 4;
@@ -280,7 +280,6 @@ class EngineVK : public EngineDummy
     float _shadowCamFwd[3] = {};
     int _shadowOmniCount = 0;
     float _shadowSunFactor = 1.0f;
-    bool _shadowEnabled = false;
     ShadowMapTuning _shadowTuning;
 
     bool EnsureShadowResources(int res, int layers);

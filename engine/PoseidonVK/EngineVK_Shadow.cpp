@@ -71,12 +71,12 @@ namespace Poseidon
 
 void EngineVK::SetShadowMapsEnabled(bool enabled)
 {
-    _shadowEnabled = enabled;
+    _shadowTuning.enabled = enabled;
 }
 
 bool EngineVK::ShadowMapsEnabled() const
 {
-    return _shadowEnabled;
+    return _shadowTuning.enabled;
 }
 
 Engine::ShadowMapTuning EngineVK::GetShadowMapTuning() const
@@ -91,7 +91,7 @@ void EngineVK::SetShadowMapTuning(const ShadowMapTuning& tuning)
 
 void EngineVK::SetShadowMapSunFactor(float f)
 {
-    _shadowSunFactor = f;
+    _shadowSunFactor = std::clamp(f, 0.0f, 1.0f);
 }
 
 bool EngineVK::DumpShadowMap(const char* /*path*/)
@@ -113,11 +113,12 @@ bool EngineVK::ShadowMapCacheSelfTest()
 
 void EngineVK::UpdateShadowFrameConstants()
 {
-    const bool active = _shadowEnabled && _shadowMapActive && _shadowSunFactor > 0.01f;
+    const bool active = _shadowTuning.enabled && _shadowMapActive && _shadowSunFactor > 0.01f;
 
     _lastFrameConstants.shadowCtl[0] = active ? 1.0f : 0.0f;
     _lastFrameConstants.shadowCtl[1] = _shadowTuning.biasBase;
-    _lastFrameConstants.shadowCtl[2] = _shadowTuning.darkness * _shadowSunFactor;
+    _lastFrameConstants.shadowCtl[2] =
+        1.0f - _shadowSunFactor * (1.0f - _shadowTuning.darkness);
     _lastFrameConstants.shadowCtl[3] =
         (_shadowMapRes > 0) ? (1.0f / static_cast<float>(_shadowMapRes)) : 0.0f;
 
@@ -277,12 +278,12 @@ bool EngineVK::EnsureShadowResources(int res, int layers)
         }
     }
 
-    // 4. Shadow sampler (linear, clamp-to-edge, no comparison for manual PCF)
+    // 4. Shadow sampler (nearest, clamp-to-edge, no comparison for manual PCF)
     {
         VkSamplerCreateInfo si{};
         si.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        si.magFilter    = VK_FILTER_LINEAR;
-        si.minFilter    = VK_FILTER_LINEAR;
+        si.magFilter    = VK_FILTER_NEAREST;
+        si.minFilter    = VK_FILTER_NEAREST;
         si.mipmapMode   = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -581,6 +582,8 @@ bool EngineVK::CreateShadowDepthPipeline()
 
     // --- Alpha pipeline: vec3 xyz + vec2 uv ---
     {
+        VkPipelineRasterizationStateCreateInfo alphaRs = rs;
+        alphaRs.cullMode = VK_CULL_MODE_NONE;
         VkVertexInputBindingDescription bind{};
         bind.binding   = 0;
         bind.stride    = sizeof(float) * 5;
@@ -620,7 +623,7 @@ bool EngineVK::CreateShadowDepthPipeline()
         gpi.pVertexInputState   = &vi;
         gpi.pInputAssemblyState = &ia;
         gpi.pViewportState      = &vp;
-        gpi.pRasterizationState = &rs;
+        gpi.pRasterizationState = &alphaRs;
         gpi.pMultisampleState   = &ms;
         gpi.pDepthStencilState  = &ds;
         gpi.pColorBlendState    = &cb;
@@ -738,7 +741,7 @@ void EngineVK::RenderShadowDepthScene(
     int                    res,
     const ShadowCasterSet& casters)
 {
-    if (!_shadowEnabled || !_device || !_commandPool || !_graphicsQueue)
+    if (!_shadowTuning.enabled || !_device || !_commandPool || !_graphicsQueue)
         return;
 
     numCascades = std::min(numCascades, kShadowCascades);

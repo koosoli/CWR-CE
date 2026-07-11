@@ -191,8 +191,11 @@ SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
     // Fog
     s.fogStart = scene.GetFogMinRange();
     s.fogEnd = scene.GetFogMaxRange();
-    // fogColorRGBA stays 0; backend-internal colour conversion happens
-    // at draw time.
+    const PackedColor fogColor(engine.FogColor());
+    s.fogColorRGBA = (static_cast<std::uint32_t>(fogColor.R8()) << 24) |
+                       (static_cast<std::uint32_t>(fogColor.G8()) << 16) |
+                       (static_cast<std::uint32_t>(fogColor.B8()) << 8) |
+                       static_cast<std::uint32_t>(fogColor.A8());
 
     // Sun — extract the enabled flag and world-space travel direction.
     // The frame layer stores an identity sun matrix; the live engine's

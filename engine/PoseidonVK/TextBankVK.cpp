@@ -112,7 +112,7 @@ Texture* TextBankVK::CreateDynamic(int w, int h, const void* rgba, uint32_t size
     TextureVK* tex = new TextureVK(_engine);
     _textures[slot] = tex;
 
-    tex->_resourceId = TextureVK::kFallbackResourceId + static_cast<std::uint32_t>(slot) + 1;
+    tex->_resourceId = TextureVK::AllocateResourceId();
     tex->_w = w;
     tex->_h = h;
     tex->_nMipmaps = 1;
@@ -133,9 +133,6 @@ Texture* TextBankVK::CreateDynamic(int w, int h, const void* rgba, uint32_t size
         return tex;
     }
 
-    vk::TransitionImageLayout(_engine._device, _engine._commandPool, _engine._graphicsQueue,
-                              tex->_image.image, 1,
-                              VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     UpdateDynamic(tex, rgba, size);
 
     // Sampler
@@ -198,10 +195,14 @@ void TextBankVK::UpdateDynamic(Texture* t, const void* rgba, uint32_t size)
 
     vk::UploadMappedBuffer(staging, rgba, size);
 
-    // Transition back to TRANSFER_DST, copy, then SHADER_READ_ONLY
+    const VkImageLayout oldLayout = tex->_dynamicImageUploaded
+                                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                        : VK_IMAGE_LAYOUT_UNDEFINED;
+
+    // Transition to TRANSFER_DST, copy, then SHADER_READ_ONLY.
     vk::TransitionImageLayout(_engine._device, _engine._commandPool, _engine._graphicsQueue,
                               tex->_image.image, 1,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              oldLayout,
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
     vk::CopyBufferToImage(_engine._device, _engine._commandPool, _engine._graphicsQueue,
@@ -212,6 +213,7 @@ void TextBankVK::UpdateDynamic(Texture* t, const void* rgba, uint32_t size)
                               tex->_image.image, 1,
                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    tex->_dynamicImageUploaded = true;
 
     vk::DestroyBuffer(_engine._device, staging);
 }

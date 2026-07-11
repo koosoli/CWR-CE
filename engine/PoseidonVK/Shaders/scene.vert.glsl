@@ -118,12 +118,13 @@ void main()
         vTexcoord1 = inTexcoord;
     }
 
-    // Fog factor computed vertex-side from the uploaded frame constants, mirroring
-    // the GL33 vsTransform convention: distance is camera-relative (view-space
-    // length), factor = clamp(1 - (dist - start) * invRange). fogParams.w carries
-    // the enabled flag (1.0 = on); when off the factor is forced to 1.0 (no fog).
-    // The fragment shader then mixes toward frame.fogColor by this factor.
+    // Per-draw fog control (mirrors FogMode in RenderPassDescriptor.hpp):
+    //   0 = Enabled  — standard distance fog
+    //   1 = Disabled — no fog (sky, cockpit, first-person)
+    //   2 = AlphaFog — alpha-channel attenuation (treated as enabled for now)
+    // When disabled the factor is forced to 1.0 (no fog mixing in the fragment shader).
+    uint fogMode = hasDrawConstants ? drawConstants.draws[drawIndex].fog : 0u;
     float dist = length(viewPos.xyz);
     float fogFactor = clamp(1.0 - (dist - frame.fogParams.x) * frame.fogParams.z, 0.0, 1.0);
-    vFogFactor = (frame.fogParams.w > 0.5) ? fogFactor : 1.0;
+    vFogFactor = (fogMode == 1u) ? 1.0 : ((frame.fogParams.w > 0.5) ? fogFactor : 1.0);
 }

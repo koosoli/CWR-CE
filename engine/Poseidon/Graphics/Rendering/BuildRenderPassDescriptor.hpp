@@ -192,6 +192,18 @@ inline RenderPassDescriptor BuildRenderPassDescriptor(const LegacySpec& spec, co
         d.pass = PassKind::SurfaceOverlay;
     }
 
+    // NoZBuf draws (sky, cockpit, first-person HUD) must never fog, and
+    // need backface culling disabled because the camera views them from
+    // inside (sky dome, cockpit interior).
+    // GL33's ApplyPassState explicitly disables fog for PassId::Sky and
+    // PassId::Cockpit — match that here so the descriptor is correct
+    // regardless of backend overrides.
+    if (d.depth == DepthMode::Disabled)
+    {
+        d.fog = FogMode::Disabled;
+        d.cull = CullMode::None;
+    }
+
     return d;
 }
 

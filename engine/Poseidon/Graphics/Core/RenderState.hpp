@@ -154,6 +154,12 @@ inline PassId SpecToPassId(const render::LegacySpec& spec)
         return PassId::Light;
     if (render::Has(backend, render::Backend::IsWater))
         return PassId::Water;
+    // The sky dome combines NoZBuf with IsAlphaFog. Preserve the historical
+    // alpha/cutout ordering for all other draws while routing this distinct
+    // no-depth family to the sky pass.
+    if (render::Has(backend, render::Backend::NoZBuf) &&
+        render::Has(backend, render::Backend::IsAlphaFog))
+        return PassId::Sky;
     if (render::Has(backend, render::Backend::IsAlphaFog))
         return PassId::Transparent;
     if (render::Has(backend, render::Backend::IsAlpha))
