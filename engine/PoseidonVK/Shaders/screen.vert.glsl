@@ -34,6 +34,6 @@ void main()
     gl_Position.z = inPosition.z * w;
     gl_Position.w = w;
 
-    vColor = inColor;
+    vColor = inColor.zyxw;
     vTexcoord = inTexcoord;
 }
