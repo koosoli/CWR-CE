@@ -141,9 +141,9 @@ class EngineVK : public EngineDummy
     void DestroyScreenVertexBuffer();
     void RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPhaseVK phase);
     void AppendScreenBatch(std::uint32_t textureId, std::uint32_t indexCount, vk::ScreenDrawPhaseVK phase,
-                           std::uint32_t samplerFilter, std::uint32_t samplerClamp);
-    void PushScreenQuad(const TLVertex* quad, std::uint32_t textureId, std::uint32_t samplerFilter,
-                        std::uint32_t samplerClamp);
+                           const render::RenderPassDescriptor& descriptor);
+    void PushScreenQuad(const TLVertex* quad, std::uint32_t textureId,
+                        const render::RenderPassDescriptor& descriptor);
     bool CreateCommandPool();
     bool CreateSyncObjects();
     bool RecordBootstrapCommand(uint32_t imageIndex);
@@ -207,6 +207,7 @@ class EngineVK : public EngineDummy
     vk::PipelineCacheVK _scenePipelineCache;
     // 2D / screen-space pipeline resources.
     VkPipeline _screenPipeline = VK_NULL_HANDLE;
+    vk::PipelineCacheVK _screenPipelineCache;
     VkPipelineLayout _screenPipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout _screenDescriptorSetLayout = VK_NULL_HANDLE;
     VkShaderModule _screenVertexModule = VK_NULL_HANDLE;
@@ -272,16 +273,14 @@ class EngineVK : public EngineDummy
         std::uint32_t textureId = 0;
         std::uint32_t firstIndex = 0;
         std::uint32_t indexCount = 0;
-        std::uint32_t samplerFilter = 0;
-        std::uint32_t samplerClamp = 0;
         vk::ScreenDrawPhaseVK phase = vk::ScreenDrawPhaseVK::Overlay;
+        render::RenderPassDescriptor descriptor = {};
     };
     std::vector<ScreenBatchVK> _screenBatches;
     const TLVertexTable* _screenMesh = nullptr;
     std::size_t _screenMeshBase = 0;
     std::uint32_t _screenTextureId = 0;
-    std::uint32_t _screenSamplerFilter = 0;
-    std::uint32_t _screenSamplerClamp = 0;
+    render::RenderPassDescriptor _screenDescriptor = {};
     vk::ScreenDrawPhaseVK _screenMeshPhase = vk::ScreenDrawPhaseVK::Overlay;
     bool _screenBuffersUploaded = false;
 

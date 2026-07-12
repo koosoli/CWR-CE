@@ -68,16 +68,20 @@ struct BootstrapVertex
 
 static_assert(sizeof(BootstrapVertex) == sizeof(float) * 5);
 
-struct ScreenSamplerVK
+render::RenderPassDescriptor ScreenDescriptorFromLegacySpec(int specFlags)
 {
-    std::uint32_t filter = 0;
-    std::uint32_t clamp = 0;
-};
+    render::BuildContext context;
+    context.isIn3DPass = false;
+    return render::BuildRenderPassDescriptor(render::SplitLegacy(specFlags), context);
+}
 
-ScreenSamplerVK ScreenSamplerFromLegacySpec(int specFlags)
+bool SameScreenDescriptor(const render::RenderPassDescriptor& a, const render::RenderPassDescriptor& b)
 {
-    const render::RenderPassDescriptor descriptor = render::BuildRenderPassDescriptor(render::SplitLegacy(specFlags));
-    return {static_cast<std::uint32_t>(descriptor.sampler.filter), vk::BuildSamplerClampMask(descriptor.sampler)};
+    return a.pass == b.pass && a.depth == b.depth && a.blend == b.blend && a.fog == b.fog &&
+           a.cull == b.cull && a.frontFace == b.frontFace && a.alpha == b.alpha &&
+           a.alphaRef == b.alphaRef && a.surface == b.surface &&
+           a.sampler.filter == b.sampler.filter && a.sampler.clampU == b.sampler.clampU &&
+           a.sampler.clampV == b.sampler.clampV;
 }
 
 constexpr BootstrapVertex kBootstrapTriangleVertices[] = {
@@ -1928,6 +1932,7 @@ bool EngineVK::CreateScreenPipeline()
 {
     if (_device)
     {
+        _screenPipelineCache.Destroy(_device);
         if (_screenPipeline)
         {
             vkDestroyPipeline(_device, _screenPipeline, nullptr);
@@ -2075,6 +2080,8 @@ bool EngineVK::CreateScreenPipeline()
     }
 
     SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_screenPipeline), "PoseidonVK Screen Pipeline");
+    _screenPipelineCache.Init(_device, _renderPass, _screenPipelineLayout, _screenVertexModule, _screenFragmentModule,
+                              vertexInput, inputAssembly, viewportState, multisampling);
     LOG_INFO(Graphics, "Vulkan: screen pipeline created");
     return true;
 }
@@ -2628,6 +2635,8 @@ void EngineVK::DestroyScenePipelineLayout()
 
 void EngineVK::DestroyScreenPipeline()
 {
+    if (_device)
+        _screenPipelineCache.Destroy(_device);
     if (_device && _screenPipeline)
     {
         vkDestroyPipeline(_device, _screenPipeline, nullptr);
@@ -3004,8 +3013,7 @@ void EngineVK::InitDraw(bool clear, PackedColor color)
     _screenMesh = nullptr;
     _screenMeshBase = 0;
     _screenTextureId = 0;
-    _screenSamplerFilter = 0;
-    _screenSamplerClamp = 0;
+    _screenDescriptor = {};
     _screenMeshPhase = vk::ScreenDrawPhaseVK::Overlay;
     _screenBuffersUploaded = false;
 }
@@ -3228,8 +3236,7 @@ void EngineVK::Draw2D(const Draw2DPars& pars, const Rect2DAbs& rect, const Rect2
     pos[3].t0.u = uBL, pos[3].t0.v = vBL;
 
     std::uint32_t textureId = GetOrCreateTextureResourceId(pars.mip._texture);
-    const ScreenSamplerVK sampler = ScreenSamplerFromLegacySpec(pars.spec);
-    PushScreenQuad(pos, textureId, sampler.filter, sampler.clamp);
+    PushScreenQuad(pos, textureId, ScreenDescriptorFromLegacySpec(pars.spec));
 }
 
 void EngineVK::DrawPoly(const MipInfo& mip, const Vertex2DAbs* vertices, int n, const Rect2DAbs& clipRect,
@@ -3355,8 +3362,7 @@ void EngineVK::DrawPoly(const MipInfo& mip, const Vertex2DAbs* vertices, int n, 
         indexCount += 3;
     }
 
-    const ScreenSamplerVK sampler = ScreenSamplerFromLegacySpec(specFlags);
-    AppendScreenBatch(textureId, indexCount, vk::ScreenDrawPhaseVK::Overlay, sampler.filter, sampler.clamp);
+    AppendScreenBatch(textureId, indexCount, vk::ScreenDrawPhaseVK::Overlay, ScreenDescriptorFromLegacySpec(specFlags));
 }
 
 void EngineVK::DrawPoly(const MipInfo& mip, const Vertex2DPixel* vertices, int n, const Rect2DPixel& clipRect,
@@ -3485,8 +3491,7 @@ void EngineVK::DrawPoly(const MipInfo& mip, const Vertex2DPixel* vertices, int n
         indexCount += 3;
     }
 
-    const ScreenSamplerVK sampler = ScreenSamplerFromLegacySpec(specFlags);
-    AppendScreenBatch(textureId, indexCount, vk::ScreenDrawPhaseVK::Overlay, sampler.filter, sampler.clamp);
+    AppendScreenBatch(textureId, indexCount, vk::ScreenDrawPhaseVK::Overlay, ScreenDescriptorFromLegacySpec(specFlags));
 }
 
 void EngineVK::DrawLine(const Line2DAbs& line, PackedColor c0, PackedColor c1, const Rect2DAbs& clip)
@@ -3546,9 +3551,7 @@ void EngineVK::DrawLine(const Line2DAbs& line, PackedColor c0, PackedColor c1, c
 void EngineVK::PrepareTriangle(const MipInfo& mip, int specFlags)
 {
     _screenTextureId = GetOrCreateTextureResourceId(mip._texture);
-    const ScreenSamplerVK sampler = ScreenSamplerFromLegacySpec(specFlags);
-    _screenSamplerFilter = sampler.filter;
-    _screenSamplerClamp = sampler.clamp;
+    _screenDescriptor = ScreenDescriptorFromLegacySpec(specFlags);
 }
 
 void EngineVK::DrawPolygon(const VertexIndex* indices, int nVertices)
@@ -3571,7 +3574,7 @@ void EngineVK::DrawPolygon(const VertexIndex* indices, int nVertices)
         _screenIndices.push_back(static_cast<std::uint16_t>(_screenMeshBase + indices[i + 1]));
     }
 
-    AppendScreenBatch(_screenTextureId, indexCount, _screenMeshPhase, _screenSamplerFilter, _screenSamplerClamp);
+    AppendScreenBatch(_screenTextureId, indexCount, _screenMeshPhase, _screenDescriptor);
 }
 
 void EngineVK::DrawSection(const FaceArray& faces, Offset begin, Offset end)
@@ -3610,8 +3613,8 @@ void EngineVK::EndMesh(TLVertexTable& /*mesh*/)
     _screenMesh = nullptr;
 }
 
-void EngineVK::PushScreenQuad(const TLVertex* quad, std::uint32_t textureId, std::uint32_t samplerFilter,
-                              std::uint32_t samplerClamp)
+void EngineVK::PushScreenQuad(const TLVertex* quad, std::uint32_t textureId,
+                               const render::RenderPassDescriptor& descriptor)
 {
     if (_screenVertices.size() + 4 > std::numeric_limits<std::uint16_t>::max())
     {
@@ -3633,11 +3636,11 @@ void EngineVK::PushScreenQuad(const TLVertex* quad, std::uint32_t textureId, std
     _screenIndices.push_back(static_cast<std::uint16_t>(baseIndex + 2));
     _screenIndices.push_back(static_cast<std::uint16_t>(baseIndex + 3));
 
-    AppendScreenBatch(textureId, 6, vk::ScreenDrawPhaseVK::Overlay, samplerFilter, samplerClamp);
+    AppendScreenBatch(textureId, 6, vk::ScreenDrawPhaseVK::Overlay, descriptor);
 }
 
 void EngineVK::AppendScreenBatch(std::uint32_t textureId, std::uint32_t indexCount, vk::ScreenDrawPhaseVK phase,
-                                 std::uint32_t samplerFilter, std::uint32_t samplerClamp)
+                                  const render::RenderPassDescriptor& descriptor)
 {
     if (indexCount == 0)
         return;
@@ -3646,8 +3649,7 @@ void EngineVK::AppendScreenBatch(std::uint32_t textureId, std::uint32_t indexCou
     if (!_screenBatches.empty())
     {
         ScreenBatchVK& previous = _screenBatches.back();
-        if (previous.textureId == textureId && previous.samplerFilter == samplerFilter &&
-            previous.samplerClamp == samplerClamp && previous.phase == phase &&
+        if (previous.textureId == textureId && SameScreenDescriptor(previous.descriptor, descriptor) && previous.phase == phase &&
             previous.firstIndex + previous.indexCount == firstIndex)
         {
             previous.indexCount += indexCount;
@@ -3655,7 +3657,7 @@ void EngineVK::AppendScreenBatch(std::uint32_t textureId, std::uint32_t indexCou
         }
     }
 
-    _screenBatches.push_back({textureId, firstIndex, indexCount, samplerFilter, samplerClamp, phase});
+    _screenBatches.push_back({textureId, firstIndex, indexCount, phase, descriptor});
 }
 
 void EngineVK::RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPhaseVK phase)
@@ -3674,8 +3676,6 @@ void EngineVK::RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPh
         _screenBuffersUploaded = true;
     }
 
-    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _screenPipeline);
-
     VkBuffer vertexBuffers[] = {_screenVertexBuffer.buffer};
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
@@ -3686,22 +3686,33 @@ void EngineVK::RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPh
                        vk::kScreenPushConstantsSize, &constants);
 
     VkDescriptorSet lastBoundTexDescriptorSet = VK_NULL_HANDLE;
+    VkPipeline lastBoundPipeline = VK_NULL_HANDLE;
 
     for (const ScreenBatchVK& batch : _screenBatches)
     {
         if (batch.phase != phase || batch.indexCount == 0)
             continue;
 
+        const VkPipeline pipeline = _screenPipelineCache.Get(vk::KeyFromDescriptor(batch.descriptor));
+        if (pipeline != lastBoundPipeline)
+        {
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline ? pipeline : _screenPipeline);
+            lastBoundPipeline = pipeline;
+        }
+
+        const std::uint32_t samplerFilter = static_cast<std::uint32_t>(batch.descriptor.sampler.filter);
+        const std::uint32_t samplerClamp = vk::BuildSamplerClampMask(batch.descriptor.sampler);
+
         VkDescriptorSet texDescriptorSet = VK_NULL_HANDLE;
         if (batch.textureId != 0)
         {
             TextureVK* tex = ResolveTexture(batch.textureId);
             if (tex)
-                texDescriptorSet = tex->GetDescriptorSet(batch.samplerFilter, batch.samplerClamp);
+                texDescriptorSet = tex->GetDescriptorSet(samplerFilter, samplerClamp);
         }
         if (texDescriptorSet == VK_NULL_HANDLE && _fallbackWhiteTexture)
         {
-            texDescriptorSet = _fallbackWhiteTexture->GetDescriptorSet(batch.samplerFilter, batch.samplerClamp);
+            texDescriptorSet = _fallbackWhiteTexture->GetDescriptorSet(samplerFilter, samplerClamp);
         }
 
         if (texDescriptorSet != VK_NULL_HANDLE && texDescriptorSet != lastBoundTexDescriptorSet)
