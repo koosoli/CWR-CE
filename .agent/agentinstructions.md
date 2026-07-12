@@ -29,6 +29,14 @@ if the work spans multiple turns. Break structural changes into micro-steps and
 validate at natural checkpoints, especially after CMake changes, header moves,
 or renderer-boundary edits.
 
+### README Roadmap Progress Tracking
+
+As you complete work on any feature listed in `README.md`'s roadmap phases,
+update the checklist to mark it done (replace `[ ]` with `[x]`). If you
+implement something that wasn't on the list but fits a phase, add it and mark
+it `[x]`. This keeps the roadmap an accurate live record of what has been
+shipped versus what remains.
+
 ### Model Routing
 
 At the end of a work cycle, briefly advise whether the next subtask is suitable

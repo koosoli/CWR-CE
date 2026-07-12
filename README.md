@@ -149,13 +149,18 @@ smoke-testable.
 - [ ] Define backend-neutral texture, mesh, material, compression, and residency
   descriptors.
 - [ ] Add native modern texture loader paths beside legacy PAA/PAC handling.
+- [ ] Add COLLADA (.dae) model import support as an alternative to legacy P3D/ODOL formats.
+- [ ] Add GLTF 2.0 model import support with skeletal animation.
 - [ ] Align Vulkan uploads with block-compressed formats such as BC7 where
   supported.
 - [ ] Add upload budgets, staging paths, residency telemetry, and diagnostics.
 - [ ] Keep GL33 insulated with fallback, transcode, emulation, or explicit
   diagnostics when a modern asset feature cannot map directly.
+- [ ] Integrate BC7 texture compressor into the asset pipeline.
+- [ ] Add specular-to-metalness material conversion tooling.
+- [ ] Add lip sync generation tool to the asset pipeline.
 
-### Phase 4 - Asset Scale And Visual Modernization
+### Phase 4 - Visual Modernization
 
 - [ ] Audit and extend 16-bit index assumptions for larger meshes.
 - [ ] Add 32-bit index metadata and backend draw support.
@@ -164,14 +169,22 @@ smoke-testable.
 - [ ] Vulkan Camera Matrix Floating-Point Precision: Refactor the camera projection uniform math to utilize large-world relative-coordinate anchoring to eliminate vertex jitter at extreme map distances (5000m+).
 - [ ] Graceful Asset Loader Fallbacks: Lock down `TextBankVK` format mappings to route all legacy unhandled color formats (like paletted P8 or uncompressed AI88) straight to `kFallbackResourceId = 1` cleanly without outputting console clutter.
 - [ ] Improve lighting and shaders after Vulkan parity is stable.
-- [ ] Explore HDR, tone mapping, better shadows, normal mapping, and optional advanced effects only after the baseline renderer is trustworthy.
+- [ ] Implement HDR post-processing pipeline (Rgba16Float intermediate target, tone mapping).
+- [ ] Add AMD FidelityFX Super Resolution (FSR) upscaling as the final post-processing pass.
+- [ ] Implement procedural atmospheric sky with Rayleigh and Mie scattering, Earth curvature model, and GPU-culled stars rendered via mesh shaders.
+- [ ] Add layered cloud rendering.
+- [ ] Implement rain with droplet particles or screen-space weather effects.
+- [ ] Add sea/ocean rendering with tide simulation, dynamic wave height and animated sea texture.
+- [ ] Add GPU-accelerated terrain rendering with heightmap LOD and texturing.
+- [ ] Add smooth cascaded shadow map transition blending.
+- [ ] Implement night vision post-processing effect.
 
 ### Phase 4.5 - Sandbox Physics & Core Foundation (Box3D Integration)
 
 - [ ] Isolate Presentation Physics (Step 1): Introduce Box3D (C17) initially as an isolated Visual Presentation Subsystem (debris, particle collision, destructible walls), feeding transforms directly to dynamic Vulkan draw buffers.
 - [ ] Abstract Simulation Bindings (Step 2): Structure the Box3D integration layer using abstract state wrappers (`PhysicsWorldBridge`), isolating it from the legacy engine's internal movement tickers.
 - [ ] Multi-Threaded Broadphase Environment Mapping: Feed the Vulkan terrain heightfield matrix and static object convex hulls into the Box3D world, verifying deterministic island-solving across threads.
-- [ ] Future Parity Milestone: Document the performance profiling of Box3D’s character mover and joint constraints to prepare for a complete replacement of the legacy simulation/vehicle physics engine in a post-Vulkan roadmap branch.
+- [ ] Future Parity Milestone: Document the performance profiling of Box3D's character mover and joint constraints to prepare for a complete replacement of the legacy simulation/vehicle physics engine in a post-Vulkan roadmap branch.
 
 ### Phase 5 - Modern Forward+ Shading Pipeline
 
@@ -181,11 +194,31 @@ smoke-testable.
 
 ### Phase 6 - Compute Shader FX Scale
 
-- [ ] Compute Shader Weather Particles: Offload weather and rain simulation entirely to a GPU compute pipeline to track physical droplets interacting with wind and depth buffers.
+- [ ] Compute shader weather particles: Offload weather and rain simulation entirely to a GPU compute pipeline to track physical droplets interacting with wind and depth buffers.
+- [ ] GPU compute particle system for smoke, fire, explosions, and environmental effects.
+- [ ] Mesh shader pipeline for GPU-driven star rendering and other meshlet-based geometry.
+
+### Phase 7 - Gameplay And Engine Fixes
+
+- [ ] Implement configurable multi-barrel weapon rotation system (support for Shilka-style 4-barrel and Gatling-style weapons).
+- [ ] Add amphibious vehicle physics with configurable buoyancy and water movement speed.
+- [ ] Improve multi-turret support (commander turret with independent elevation and fire control).
+- [ ] Fix roof movement: Investigate and port building-roof collision improvements so characters can stand and walk on roofs.
+- [ ] Fix vehicle surface riding: Investigate and port vehicle collision improvements so characters can stand on tank roofs, jeep hoods, etc.
+- [ ] Improve third-person camera collision using physics (follow player underwater/underground, camera-body collision).
+- [ ] Add reload-while-firing support for vehicle autocannons (config-driven per muzzle).
+- [ ] Fix water surface normal and terrain lighting direction.
+
+### Phase 8 - Input And Platform
+
+- [ ] Add joystick/gamepad support.
+- [ ] Add multiscreen support (UI size, offset, position configuration).
+- [ ] Improve VR rendering and ensure compatibility across headsets (Quest 3, Valve Index, etc.).
 
 ### Phase 9 - Async Audio Pipeline Modernization
 
 - [ ] Asynchronous Multi-Channel Audio Queue: Refactor the synchronous, blocking command radio line player to handle real-time sample streaming on a dedicated thread, eliminating frame-pacing drops.
+- [ ] Add animated loading screens with audio synchronization.
 
 ## AI-Assisted Development And Funding
 
