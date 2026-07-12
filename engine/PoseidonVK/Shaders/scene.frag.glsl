@@ -228,7 +228,7 @@ void main()
     // Cascade shadow map lookup
     // -----------------------------------------------------------------------
     uint fogMode = hasDraw ? drawConstants.draws[drawIdx].fog : 0u;
-    if (fogMode == kFogEnabled && family != kFamilyFlat && family != kFamilyWater && frame.shadowCtl.x > 0.5)
+    if (family != kFamilyFlat && family != kFamilyWater && frame.shadowCtl.x > 0.5)
     {
         int nC = int(frame.cascadeCtl.x);
         int omniN = int(frame.cascadeCtl.w);

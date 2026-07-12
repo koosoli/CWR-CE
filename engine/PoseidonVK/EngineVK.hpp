@@ -139,8 +139,10 @@ class EngineVK : public EngineDummy
     void DestroyScreenDescriptorResources();
     void DestroyScreenVertexBuffer();
     void RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPhaseVK phase);
-    void AppendScreenBatch(std::uint32_t textureId, std::uint32_t indexCount, vk::ScreenDrawPhaseVK phase);
-    void PushScreenQuad(const TLVertex* quad, std::uint32_t textureId);
+    void AppendScreenBatch(std::uint32_t textureId, std::uint32_t indexCount, vk::ScreenDrawPhaseVK phase,
+                           std::uint32_t samplerFilter, std::uint32_t samplerClamp);
+    void PushScreenQuad(const TLVertex* quad, std::uint32_t textureId, std::uint32_t samplerFilter,
+                        std::uint32_t samplerClamp);
     bool CreateCommandPool();
     bool CreateSyncObjects();
     bool RecordBootstrapCommand(uint32_t imageIndex);
@@ -268,12 +270,16 @@ class EngineVK : public EngineDummy
         std::uint32_t textureId = 0;
         std::uint32_t firstIndex = 0;
         std::uint32_t indexCount = 0;
+        std::uint32_t samplerFilter = 0;
+        std::uint32_t samplerClamp = 0;
         vk::ScreenDrawPhaseVK phase = vk::ScreenDrawPhaseVK::Overlay;
     };
     std::vector<ScreenBatchVK> _screenBatches;
     const TLVertexTable* _screenMesh = nullptr;
     std::size_t _screenMeshBase = 0;
     std::uint32_t _screenTextureId = 0;
+    std::uint32_t _screenSamplerFilter = 0;
+    std::uint32_t _screenSamplerClamp = 0;
     vk::ScreenDrawPhaseVK _screenMeshPhase = vk::ScreenDrawPhaseVK::Overlay;
     bool _screenBuffersUploaded = false;
 
@@ -307,6 +313,7 @@ class EngineVK : public EngineDummy
     int _shadowOmniCount = 0;
     float _shadowSunFactor = 1.0f;
     ShadowMapTuning _shadowTuning;
+    float _maxSamplerAnisotropy = 1.0f;
 
     bool EnsureShadowResources(int res, int layers);
     void DestroyShadowResources();

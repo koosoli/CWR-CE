@@ -237,7 +237,8 @@ bool TextureVK::Init(RStringB name)
     si.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     si.mipLodBias = 0.0f;
-    si.anisotropyEnable = VK_FALSE;
+    si.anisotropyEnable = VK_TRUE;
+    si.maxAnisotropy = _engine._maxSamplerAnisotropy;
     si.compareEnable = VK_FALSE;
     si.minLod = 0.0f;
     si.maxLod = static_cast<float>(_nMipmaps);
@@ -458,6 +459,8 @@ VkDescriptorSet TextureVK::GetDescriptorSet(std::uint32_t samplerFilter, std::ui
     samplerInfo.addressModeV = (samplerClamp & 2u) ? VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE : VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.addressModeW = samplerInfo.addressModeV;
     samplerInfo.maxLod = static_cast<float>(_nMipmaps);
+    samplerInfo.anisotropyEnable = VK_TRUE;
+    samplerInfo.maxAnisotropy = _engine._maxSamplerAnisotropy;
 
     VkSampler sampler = VK_NULL_HANDLE;
     if (vkCreateSampler(_engine._device, &samplerInfo, nullptr, &sampler) != VK_SUCCESS)
