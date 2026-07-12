@@ -807,7 +807,7 @@ bool EngineVK::CreateScenePipelineLayout()
                                           _textureDescriptorSetLayout};
 
     VkPushConstantRange pushConstants{};
-    pushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstants.offset = 0;
     pushConstants.size = vk::kScenePushConstantsSize;
 
@@ -3681,10 +3681,6 @@ void EngineVK::RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPh
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
     vkCmdBindIndexBuffer(commandBuffer, _screenIndexBuffer.buffer, 0, VK_INDEX_TYPE_UINT16);
 
-    vk::ScreenPushConstantsVK constants = vk::BuildScreenPushConstants(_width, _height);
-    vkCmdPushConstants(commandBuffer, _screenPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0,
-                       vk::kScreenPushConstantsSize, &constants);
-
     VkDescriptorSet lastBoundTexDescriptorSet = VK_NULL_HANDLE;
     VkPipeline lastBoundPipeline = VK_NULL_HANDLE;
 
@@ -3702,6 +3698,11 @@ void EngineVK::RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPh
 
         const std::uint32_t samplerFilter = static_cast<std::uint32_t>(batch.descriptor.sampler.filter);
         const std::uint32_t samplerClamp = vk::BuildSamplerClampMask(batch.descriptor.sampler);
+        const vk::ScreenPushConstantsVK constants = vk::BuildScreenPushConstants(
+            _width, _height, static_cast<std::uint32_t>(batch.descriptor.alpha), batch.descriptor.alphaRef);
+        vkCmdPushConstants(commandBuffer, _screenPipelineLayout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           vk::kScreenPushConstantsSize, &constants);
 
         VkDescriptorSet texDescriptorSet = VK_NULL_HANDLE;
         if (batch.textureId != 0)

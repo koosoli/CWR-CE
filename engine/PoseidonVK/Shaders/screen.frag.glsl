@@ -14,9 +14,24 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 0, binding = 0) uniform sampler2D tex0;
 
+layout(push_constant) uniform ScreenConstants
+{
+    vec2 vpScale;
+    uint alphaMode;
+    float alphaRef;
+} pc;
+
 void main()
 {
     vec4 c = vColor * texture(tex0, vTexcoord);
+    if (pc.alphaMode == 3u)
+    {
+        c.a = clamp((c.a - pc.alphaRef) / max(fwidth(c.a), 1e-4) + 0.5, 0.0, 1.0);
+    }
+    else if (pc.alphaMode == 1u && c.a < pc.alphaRef)
+    {
+        discard;
+    }
     if (c.a <= 0.0)
         discard;
     float luma = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));

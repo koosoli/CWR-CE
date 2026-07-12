@@ -17,17 +17,21 @@ namespace Poseidon::vk
 struct alignas(16) ScreenPushConstantsVK
 {
     float vpScale[2] = {0.0f, 0.0f};
-    float _pad[2] = {0.0f, 0.0f};
+    std::uint32_t alphaMode = 0;
+    float alphaRef = 0.0f;
 };
 
 inline constexpr std::uint32_t kScreenPushConstantsSize =
     static_cast<std::uint32_t>(sizeof(ScreenPushConstantsVK));
 
-inline ScreenPushConstantsVK BuildScreenPushConstants(int width, int height) noexcept
+inline ScreenPushConstantsVK BuildScreenPushConstants(int width, int height, std::uint32_t alphaMode = 0,
+                                                       std::uint32_t alphaRef = 0) noexcept
 {
     ScreenPushConstantsVK constants;
     constants.vpScale[0] = width > 0 ? 2.0f / static_cast<float>(width) : 0.0f;
     constants.vpScale[1] = height > 0 ? 2.0f / static_cast<float>(height) : 0.0f;
+    constants.alphaMode = alphaMode;
+    constants.alphaRef = static_cast<float>(alphaRef) * (1.0f / 255.0f);
     return constants;
 }
 

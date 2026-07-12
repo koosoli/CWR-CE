@@ -24,6 +24,8 @@ layout(location = 1) out vec2 vTexcoord;
 layout(push_constant) uniform ScreenConstants
 {
     vec2 vpScale; // {2/width, 2/height}
+    uint alphaMode;
+    float alphaRef;
 } pc;
 
 void main()
