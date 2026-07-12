@@ -128,6 +128,9 @@ void main()
     // When disabled the factor is forced to 1.0 (no fog mixing in the fragment shader).
     uint fogMode = hasDrawConstants ? drawConstants.draws[drawIndex].fog : 0u;
     float dist = length(viewPos.xyz);
-    float fogFactor = clamp(1.0 - (dist - frame.fogParams.x) * frame.fogParams.z, 0.0, 1.0);
+    // Exponential (power) fog ramp: replaces linear fog to stay clear across near/mid-field
+    // and fade smoothly near the far edge. Matches the visibility boost from the wgpu fork.
+    float u = clamp(dist / max(frame.fogParams.y, 1.0), 0.0, 1.0);
+    float fogFactor = 1.0 - pow(u, 3.0);
     vFogFactor = (fogMode == 1u) ? 1.0 : ((frame.fogParams.w > 0.5) ? fogFactor : 1.0);
 }

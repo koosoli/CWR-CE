@@ -114,7 +114,7 @@ SceneDraw drawItemToSceneDraw(const DrawItem& item)
 
     render::BuildContext ctx;
     ctx.isIn3DPass = true;
-    ctx.isMultitexturing = false;
+    ctx.isMultitexturing = (item.backendTexture1ResourceId != 0);
     ctx.shadowAlphaRef = 0;
     ctx.passKindHint = item.passKindHint;
 

@@ -19,5 +19,7 @@ void main()
     vec4 c = vColor * texture(tex0, vTexcoord);
     if (c.a <= 0.0)
         discard;
+    // Partial gamma boost to compensate for UNORM swapchain.
+    c.rgb = pow(c.rgb, vec3(1.0 / 1.5));
     outColor = c;
 }
