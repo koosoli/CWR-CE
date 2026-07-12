@@ -368,7 +368,7 @@ void TitleEffectBasic::DrawObject()
     PackedColor color(Color(1, 1, 1, _alpha));
     _object->SetConstantColor(color);
     _object->Draw(0, ClipAll, *_object);
-    Object::DrawWidescreenPillarbox(/*requireGameplayActive*/ false, /*force*/ true);
+    Object::DrawWidescreenPillarbox();
     // restore camera
     GScene->SetCamera(oldCam);
 }
@@ -377,17 +377,18 @@ void TitleEffectBasic::DrawRsc()
 {
     if (_rscOverlayShapes.Size() > 0)
     {
-        // 4:3 model overlay — preserve 4:3 + pillarbox while bars are on, else stretch.
-        const bool preserve4x3 = AspectRatio::ArePillarboxBarsEnabled();
+        // Title overlays use the full display outside gameplay; gameplay keeps
+        // the configured pillarbox policy.
+        const bool preserve4x3 = AspectRatio::ArePillarboxBarsEnabled() && AspectRatio::IsGameplayActive();
         for (int i = 0; i < _rscOverlayShapes.Size(); ++i)
             Object::Draw2D(_rscOverlayShapes[i], 0, PackedWhite, /*preserveAspect4x3*/ preserve4x3);
         if (_rscOverlayPillarbox)
-            Object::DrawWidescreenPillarbox(/*requireGameplayActive*/ false);
+            Object::DrawWidescreenPillarbox();
         return;
     }
     _rsc->DrawHUD(nullptr, _alpha);
     if (_rscObjectDisplayPillarbox)
-        Object::DrawWidescreenPillarbox(/*requireGameplayActive*/ false, /*force*/ true);
+        Object::DrawWidescreenPillarbox();
 }
 
 void TitleEffectBasic::Draw()

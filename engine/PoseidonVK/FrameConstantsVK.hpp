@@ -18,7 +18,7 @@ struct FrameConstantsVK
     float worldRect[4] = {};  // left, top, right, bottom
     float fogParams[4] = {};  // start, end, inverse range, enabled
     float fogColor[4] = {};   // rgba, normalized
-    float lightingParams[4] = {}; // sun enabled, local light count, local light scale, reserved
+    float lightingParams[4] = {}; // sun enabled, local light count, local light scale, night-eye intensity
     float sunDirection[4] = {};  // xyz world-space travel direction (normalized), w unused
     float localLightPosition[render::frame::kMaxFrameLocalLights][4] = {}; // xyz camera-relative, w startAtten
     float localLightDiffuse[render::frame::kMaxFrameLocalLights][4] = {};

@@ -527,6 +527,7 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
     _lastFrameConstants.grassParams[2] = _grassParam[2];
     _lastFrameConstants.grassParams[3] = _grassParam[3];
     _lastFrameConstants.time[0] = Glob.time.toFloat();
+    _lastFrameConstants.lightingParams[3] = _nightEye;
 
     _lastDrawConstants = vk::BuildDrawConstants(frame);
     _lastSceneDrawCommands = vk::BuildSceneDrawCommands(_lastDrawConstants);
@@ -553,6 +554,11 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
 
     UploadFrameConstants();
     UploadDrawConstants();
+}
+
+void EngineVK::EnableNightEye(float night)
+{
+    _nightEye = _nightVision ? 0.0f : std::clamp(night, 0.0f, 1.0f);
 }
 
 bool EngineVK::CreateInstance()
@@ -2371,16 +2377,22 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                 // Bind texture descriptor set (Set 2)
                 VkDescriptorSet tex1DescriptorSet = VK_NULL_HANDLE;
                 std::uint32_t texId1 = draw.textureIds[1];
+                const auto shaderFamily = static_cast<render::ShaderFamily>(draw.shader);
+                const bool isTiledDetail = shaderFamily == render::ShaderFamily::Detail ||
+                                           shaderFamily == render::ShaderFamily::Grass;
+                // Transition tiles clamp their base layer, but the detail layer
+                // must repeat across its 32x UV scale.
+                const std::uint32_t tex1SamplerClamp = isTiledDetail ? 0u : draw.samplerClamp;
                 if (texId1 != 0)
                 {
                     TextureVK* tex = ResolveTexture(texId1);
                     if (tex)
-                        tex1DescriptorSet = tex->GetDescriptorSet(draw.samplerFilter, draw.samplerClamp);
+                        tex1DescriptorSet = tex->GetDescriptorSet(draw.samplerFilter, tex1SamplerClamp);
                 }
 
                 if (tex1DescriptorSet == VK_NULL_HANDLE && _fallbackWhiteTexture)
                 {
-                    tex1DescriptorSet = _fallbackWhiteTexture->GetDescriptorSet(draw.samplerFilter, draw.samplerClamp);
+                    tex1DescriptorSet = _fallbackWhiteTexture->GetDescriptorSet(draw.samplerFilter, tex1SamplerClamp);
                 }
 
                 if (tex1DescriptorSet != VK_NULL_HANDLE && tex1DescriptorSet != lastBoundTex1DescriptorSet)

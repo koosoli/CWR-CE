@@ -94,7 +94,10 @@ TEST_CASE("Vulkan frame constants match std140 descriptor layout", "[vulkan][fra
     STATIC_REQUIRE(offsetof(FrameConstantsVK, cascadeSplits) == 1120);
     STATIC_REQUIRE(offsetof(FrameConstantsVK, cascadeCtl) == 1136);
     STATIC_REQUIRE(offsetof(FrameConstantsVK, camFwd) == 1152);
-    STATIC_REQUIRE(sizeof(FrameConstantsVK) == 1168);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, camPos) == 1168);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, specularColor) == 1184);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, specularCtrl) == 1200);
+    STATIC_REQUIRE(sizeof(FrameConstantsVK) == 1216);
 }
 
 TEST_CASE("Vulkan mapped buffer upload copies frame constants bytes", "[vulkan][frame-constants]")

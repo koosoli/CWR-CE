@@ -294,6 +294,12 @@ void main()
         }
     }
 
+    // Match GL33's dusk scotopic adjustment. Active NVG suppresses this on
+    // the CPU before the intensity reaches the frame constants.
+    float luminance = clamp(dot(baseColor, vec3(0.2, 0.9, 0.4)), 0.0, 1.0);
+    float nightBlend = clamp(luminance + (1.0 - frame.lightingParams.w), 0.0, 1.0);
+    baseColor = mix(vec3(luminance), baseColor, nightBlend);
+
     // -----------------------------------------------------------------------
     // Fog: vFogFactor=1 near (no fog), 0 far (full fog).
     // -----------------------------------------------------------------------

@@ -157,15 +157,25 @@ TEST_CASE("Vulkan scene shaders drive fog from the uploaded frame constants", "[
 
     // Vertex shader computes the fog factor from fogParams and emits a varying.
     CHECK(vertexSource.find("layout(location = 4) out float vFogFactor;") != std::string::npos);
-    CHECK(vertexSource.find("frame.fogParams.x") != std::string::npos);
-    CHECK(vertexSource.find("frame.fogParams.z") != std::string::npos);
+    CHECK(vertexSource.find("frame.fogParams.y") != std::string::npos);
     CHECK(vertexSource.find("frame.fogParams.w") != std::string::npos);
+    CHECK(vertexSource.find("pow(u, 3.0)") != std::string::npos);
     CHECK(vertexSource.find("vFogFactor =") != std::string::npos);
 
     // Fragment shader consumes the varying and mixes toward frame.fogColor.
     CHECK(fragmentSource.find("layout(location = 4) in float vFogFactor;") != std::string::npos);
     CHECK(fragmentSource.find("frame.fogColor.rgb") != std::string::npos);
     CHECK(fragmentSource.find("mix(frame.fogColor.rgb, baseColor, vFogFactor)") != std::string::npos);
+}
+
+TEST_CASE("Vulkan scene fragment shader applies GL33 night-eye parity", "[vulkan][scene-shaders]")
+{
+    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
+    const std::string fragmentSource = ReadTextFile(shaderDir / "scene.frag.glsl");
+
+    CHECK(fragmentSource.find("frame.lightingParams.w") != std::string::npos);
+    CHECK(fragmentSource.find("dot(baseColor, vec3(0.2, 0.9, 0.4))") != std::string::npos);
+    CHECK(fragmentSource.find("baseColor = mix(vec3(luminance), baseColor, nightBlend)") != std::string::npos);
 }
 
 TEST_CASE("Vulkan scene fragment shader drives sun lighting from frame constants", "[vulkan][scene-shaders]")

@@ -59,6 +59,7 @@ class EngineVK : public EngineDummy
     void PrepareTriangleTL(const MipInfo& mip, const render::LegacySpec& spec) override;
     void PrepareMeshTL(const LightList& lights, const Matrix4& modelToWorld, const render::LegacySpec& spec) override;
     void SetGrassParams(float a1, float a2, float a3 = 0, float a4 = 0) override;
+    void EnableNightEye(float night) override;
     AbstractTextBank* TextBank() override;
 
     // --- 2D / HUD / text screen-space draw path ---
@@ -258,6 +259,7 @@ class EngineVK : public EngineDummy
     DrawItem _currentDrawItem;
     std::uint32_t _lastTexture1ResourceId = 1;
     float _grassParam[4] = {};
+    float _nightEye = 0.0f;
 
     // Per-frame 2D draw accumulation. Vertices/indices are built during the
     // game's Draw2D/DrawPoly/DrawLine calls and emitted in RecordScreenDraws.
