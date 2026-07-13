@@ -17,6 +17,11 @@ layout(set = 0, binding = 0, std140) uniform FrameConstants
 layout(location = 0) in vec3 vWorldRay;
 layout(location = 0) out vec4 outColor;
 
+layout(push_constant) uniform ProceduralSkyParams
+{
+    float hdrEnabled;
+} skyParams;
+
 void main()
 {
     vec3 ray = normalize(vWorldRay);
@@ -39,7 +44,17 @@ void main()
     color += vec3(1.0, 0.72, 0.38) * pow(sunDot, 48.0) * 0.45;
     color += vec3(1.0, 0.88, 0.62) * smoothstep(0.99993, 0.99998, sunDot) * 2.0;
 
-    // The direct UNORM swapchain expects display-referred output until HDR is
-    // reintroduced with a validated scene resolve.
-    outColor = vec4(sqrt(clamp(color, 0.0, 1.0)), 1.0);
+    if (skyParams.hdrEnabled > 0.5)
+    {
+        // Preserve radiance above one for the FP16 scene target. The compositor
+        // reverses this 1/1.5 source transfer before ACES and bloom.
+        color += vec3(1.0, 0.62, 0.22) * pow(sunDot, 12.0) * 5.0;
+        color += vec3(1.0, 0.88, 0.62) * smoothstep(0.99993, 0.99998, sunDot) * 28.0;
+        outColor = vec4(pow(max(color, vec3(0.0)), vec3(1.0 / 1.5)), 1.0);
+    }
+    else
+    {
+        // The direct UNORM swapchain expects display-referred output.
+        outColor = vec4(sqrt(clamp(color, 0.0, 1.0)), 1.0);
+    }
 }

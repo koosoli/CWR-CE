@@ -2523,15 +2523,14 @@ void EngineVK::DestroyVolumetricCloudPipelineLayout()
 
 bool EngineVK::CreateWorldCompositeDescriptorLayout()
 {
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    const std::array<VkDescriptorSetLayoutBinding, 2> bindings = {{
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    }};
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    info.bindingCount = 1;
-    info.pBindings = &binding;
+    info.bindingCount = static_cast<uint32_t>(bindings.size());
+    info.pBindings = bindings.data();
     return vkCreateDescriptorSetLayout(_device, &info, nullptr, &_worldCompositeDescriptorSetLayout) == VK_SUCCESS;
 }
 
@@ -2552,7 +2551,7 @@ bool EngineVK::CreateWorldCompositePipelineLayout()
 bool EngineVK::CreateWorldCompositeDescriptorSet()
 {
     DestroyWorldCompositeDescriptorResources();
-    if (!_worldColorImageView || !_worldCompositeDescriptorSetLayout)
+    if (!_worldColorImageView || !_frameConstantsBuffer.buffer || !_worldCompositeDescriptorSetLayout)
         return false;
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -2565,12 +2564,15 @@ bool EngineVK::CreateWorldCompositeDescriptorSet()
     samplerInfo.maxLod = 0.0f;
     if (vkCreateSampler(_device, &samplerInfo, nullptr, &_worldCompositeSampler) != VK_SUCCESS)
         return false;
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    const std::array<VkDescriptorPoolSize, 2> poolSizes = {{
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+    }};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
     if (vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_worldCompositeDescriptorPool) != VK_SUCCESS)
         return false;
     VkDescriptorSetAllocateInfo allocation{};
@@ -2584,14 +2586,23 @@ bool EngineVK::CreateWorldCompositeDescriptorSet()
     imageInfo.sampler = _worldCompositeSampler;
     imageInfo.imageView = _worldColorImageView;
     imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = _worldCompositeDescriptorSet;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &imageInfo;
-    vkUpdateDescriptorSets(_device, 1, &write, 0, nullptr);
+    VkDescriptorBufferInfo frameInfo{};
+    frameInfo.buffer = _frameConstantsBuffer.buffer;
+    frameInfo.range = sizeof(vk::FrameConstantsVK);
+    std::array<VkWriteDescriptorSet, 2> writes{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = _worldCompositeDescriptorSet;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = &imageInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = _worldCompositeDescriptorSet;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    writes[1].pBufferInfo = &frameInfo;
+    vkUpdateDescriptorSets(_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     return true;
 }
 
@@ -3124,6 +3135,9 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _proceduralSkyPipeline);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipelineLayout, 0, 1,
                                 &_frameDescriptorSet, 0, nullptr);
+        const float hdrEnabled = _hdrEnabled ? 1.0f : 0.0f;
+        vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(hdrEnabled),
+                           &hdrEnabled);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
     }
     enum class SceneGroup
@@ -3387,6 +3401,9 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         vkCmdEndRenderPass(commandBuffer);
         EndDebugLabel(commandBuffer);
 
+        // Keep briefing/control objects and HUD out of the world target. They are
+        // display-referred legacy UI, often depth-disabled, and must be drawn only
+        // after world/cloud composition or the mission binder is cloud-occluded.
         BeginDebugLabel(commandBuffer, "PoseidonVK Present Render Pass", 0.18f, 0.65f, 0.42f);
         renderPassInfo.renderPass = _presentRenderPass;
         renderPassInfo.framebuffer = _framebuffers[imageIndex];

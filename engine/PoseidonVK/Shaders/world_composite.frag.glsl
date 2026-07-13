@@ -2,6 +2,20 @@
 
 layout(set = 0, binding = 0) uniform sampler2D worldColor;
 
+layout(set = 0, binding = 1, std140) uniform FrameConstants
+{
+    mat4 view;
+    mat4 projection;
+    mat4 sunMatrix;
+    vec4 viewport;
+    vec4 clipPlanes;
+    vec4 worldRect;
+    vec4 fogParams;
+    vec4 fogColor;
+    vec4 lightingParams;
+    vec4 sunDirection;
+} frame;
+
 layout(push_constant) uniform WorldCompositeParams
 {
     float exposure;
@@ -25,7 +39,18 @@ void main()
     // sqrt. Without source provenance, this inverse is the closest common fit.
     vec3 scene = pow(max(world.rgb, vec3(0.0)), vec3(1.5));
 
-    // Fused bright-pass bloom: nine nearby taps avoid an intermediate target.
+    // Meter the angular distance from the view centre to the analytic sun,
+    // rather than one unstable scene pixel. This tracks smoothly even when
+    // the sun disc is sub-pixel or partially hidden by cloud raymarch noise.
+    vec4 centerView = inverse(frame.projection) * vec4(0.0, 0.0, 0.0, 1.0);
+    vec3 centreRay = normalize(centerView.xyz / centerView.w);
+    vec3 centreWorldRay = normalize(transpose(mat3(frame.view)) * centreRay);
+    vec3 sunRay = normalize(-frame.sunDirection.xyz);
+    float sunInView = smoothstep(0.94, 0.9985, dot(centreWorldRay, sunRay));
+    float eyeExposure = mix(composite.exposure, composite.exposure * 0.30, sunInView);
+
+    // Fused bright-pass bloom. Two wider rings make the HDR sun radiance
+    // visibly bleed beyond its disc without another intermediate texture.
     vec2 texel = 1.0 / vec2(textureSize(worldColor, 0));
     const vec2 offsets[8] = vec2[](vec2(-2.0, 0.0), vec2(2.0, 0.0), vec2(0.0, -2.0), vec2(0.0, 2.0),
                                    vec2(-1.5, -1.5), vec2(1.5, -1.5), vec2(-1.5, 1.5), vec2(1.5, 1.5));
@@ -35,8 +60,17 @@ void main()
         vec3 sampleScene = pow(max(texture(worldColor, vUv + offsets[i] * texel).rgb, vec3(0.0)), vec3(1.5));
         bloom += max(sampleScene - vec3(0.55), vec3(0.0)) * 0.09375;
     }
+    for (int i = 0; i < 12; ++i)
+    {
+        float angle = 6.2831853 * (float(i) / 12.0);
+        vec2 direction = vec2(cos(angle), sin(angle));
+        vec3 nearRing = pow(max(texture(worldColor, vUv + direction * texel * 7.0).rgb, vec3(0.0)), vec3(1.5));
+        vec3 farRing = pow(max(texture(worldColor, vUv + direction * texel * 22.0).rgb, vec3(0.0)), vec3(1.5));
+        bloom += max(nearRing - vec3(0.55), vec3(0.0)) * 0.045;
+        bloom += max(farRing - vec3(0.55), vec3(0.0)) * 0.018;
+    }
 
-    vec3 exposed = (scene + bloom) * composite.exposure;
+    vec3 exposed = (scene + bloom) * eyeExposure;
     // Narkowicz's fitted ACES filmic curve, followed by explicit sRGB for the
     // unchanged UNORM swapchain.
     vec3 mapped = clamp((exposed * (2.51 * exposed + 0.03)) /
