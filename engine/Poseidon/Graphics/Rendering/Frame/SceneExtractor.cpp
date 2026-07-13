@@ -200,53 +200,6 @@ void bucketDraw(SceneInputs& s, PassId passId, SceneDraw&& draw)
     }
 }
 
-bool isShadowCaster(const DrawItem& item, const SceneDraw& draw)
-{
-    if (!item.isTLDraw || !draw.mesh.HasBackendMesh() || draw.indexCount <= 0)
-        return false;
-
-    using render::PassKind;
-    using render::Routing;
-    const Routing routing = item.specFlags.routing;
-    if (render::Has(routing, Routing::NoShadow) || render::Has(routing, Routing::ShadowDisabled) ||
-        render::Has(routing, Routing::IsHidden) || render::Has(routing, Routing::IsHiddenProxy))
-        return false;
-
-    // Receiver classes are also the capture-side caster classes.  Projected
-    // shadow polygons, transparent effects, sky, cockpit, and UI are never
-    // input to the cascade depth array.
-    switch (draw.descriptor.pass)
-    {
-        case PassKind::TerrainOpaque:
-        case PassKind::WorldOpaque:
-        case PassKind::WorldCutout:
-        case PassKind::SurfaceOverlay:
-            return true;
-        default:
-            return false;
-    }
-}
-
-void appendShadowCaster(SceneInputs& s, const SceneDraw& draw)
-{
-    ShadowCaster caster;
-    caster.mesh = draw.mesh;
-    caster.world = draw.world;
-    caster.indexBegin = draw.indexBegin;
-    caster.indexCount = draw.indexCount;
-    const bool cutout = draw.descriptor.alpha == render::AlphaMode::Test ||
-                        draw.descriptor.alpha == render::AlphaMode::TestAndBlend;
-    // A cutout without an alpha texture cannot reproduce an alpha test.  Match
-    // the established GL collector's deterministic solid fallback.
-    if (cutout && draw.textures[0].id != 0)
-    {
-        caster.alphaMode = ShadowCasterAlphaMode::Cutout;
-        caster.alphaTexture = draw.textures[0];
-        caster.alphaCutoff = static_cast<float>(draw.descriptor.alphaRef) / 255.0f;
-    }
-    s.shadowInput.casters.push_back(caster);
-}
-
 } // namespace
 
 SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
@@ -351,6 +304,34 @@ SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
     s.currentDebugErrorCount = engine.GetDebugErrorCount();
     s.lastDebugMessage = engine.GetLastDebugMessage();
 
+    // CSM casters are captured at the pre-T&L Shape/Object seam.  In
+    // particular, do not infer them from DrawItems: the software-T&L path has
+    // already flattened the demo world into screen-space TL vertices there.
+    // The opaque resource ids were retained by the backend during source
+    // capture, so they are valid Frame resources rather than synthetic tokens.
+    if (engine.ConsumesRenderFramePlan())
+    {
+        for (const auto& source : scene.ShadowCasterCaptures())
+        {
+            if (source.meshResourceId == 0 || source.indexCount <= 0)
+                continue;
+            ShadowCaster caster;
+            caster.mesh.id = source.meshResourceId;
+            caster.mesh.vbo.id = source.meshResourceId;
+            caster.mesh.ibo.id = source.meshResourceId;
+            ConvertMatrix(caster.world, source.modelToWorld);
+            caster.world._41 -= s.cameraPosition[0];
+            caster.world._42 -= s.cameraPosition[1];
+            caster.world._43 -= s.cameraPosition[2];
+            caster.indexBegin = source.indexBegin;
+            caster.indexCount = source.indexCount;
+            caster.alphaMode = source.cutout ? ShadowCasterAlphaMode::Cutout : ShadowCasterAlphaMode::Opaque;
+            caster.alphaTexture.id = source.alphaTextureResourceId;
+            caster.alphaCutoff = source.alphaCutoff;
+            s.shadowInput.casters.push_back(caster);
+        }
+    }
+
     // Bucket every per-frame DrawItem the engine recorded, so BuildFrame
     // produces a non-empty Frame and every descriptor invariant runs
     // against the real game's per-frame draw flow.
@@ -359,8 +340,6 @@ SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
         for (const auto& item : *draws)
         {
             SceneDraw d = drawItemToSceneDraw(item);
-            if (isShadowCaster(item, d))
-                appendShadowCaster(s, d);
             PassId passId = item.passId;
             switch (d.descriptor.pass)
             {

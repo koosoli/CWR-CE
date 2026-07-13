@@ -103,7 +103,14 @@ Frame BuildFrame(const SceneInputs& s)
     // ShadowDepth owns the cascade depth-array submission.  It carries no
     // regular Draws because its casters have their own mesh/transform/alpha
     // contract in Frame::shadowInput; do not let it clear the receiver target.
-    if (f.shadowInput.enabled && f.shadowInput.sunFactor > 0.01f && !f.shadowInput.casters.empty())
+    // Do not schedule a nominally non-empty depth phase whose records have no
+    // retained mesh.  This matters at the source-capture seam: a backend that
+    // cannot upload a Shape returns id 0, and must not leave ShadowDepth looking
+    // active while the renderer has no possible depth draw.
+    const bool hasRetainedShadowCaster = std::any_of(
+        f.shadowInput.casters.begin(), f.shadowInput.casters.end(), [](const ShadowCaster& caster)
+        { return caster.mesh.HasBackendMesh() && caster.indexCount > 0; });
+    if (f.shadowInput.enabled && f.shadowInput.sunFactor > 0.01f && hasRetainedShadowCaster)
     {
         Pass shadowDepth;
         shadowDepth.kind = FramePassKind::ShadowDepth;

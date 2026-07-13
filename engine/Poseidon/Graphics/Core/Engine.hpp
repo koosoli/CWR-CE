@@ -490,6 +490,14 @@ class Engine : public IGraphicsEngine
     virtual void EndMeshTL(const Shape& sMesh) {}                                   // forget mesh
     virtual void DrawSectionTL(const Shape& sMesh, int beg, int end) {}
 
+    // Source-level CSM capture happens before the legacy software-T&L path
+    // destroys model-space geometry.  Frame-plan backends return opaque,
+    // retained GPU resource tokens here; the shared collector never derives a
+    // caster from post-transform TL vertices.  A zero token means that this
+    // backend does not consume source-level shadow casters.
+    virtual std::uint32_t RetainShadowCasterMesh(const Shape& /*shape*/, bool /*dynamic*/) { return 0; }
+    virtual std::uint32_t ShadowCasterTextureResourceId(Texture* /*texture*/) { return 0; }
+
     virtual int HowLongIdle() { return 0; }
     virtual size_t GetDrawItemCount() const { return 0; }
     // Lifetime-of-process count of HIGH-severity GL/driver errors

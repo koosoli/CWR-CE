@@ -59,6 +59,8 @@ class EngineVK : public EngineDummy
     void BeginMeshTL(const Shape& sMesh, int spec, bool dynamic = false) override;
     void EndMeshTL(const Shape& sMesh) override;
     const std::vector<DrawItem>* GetRecordedDraws() const override { return &_drawItems; }
+    std::uint32_t RetainShadowCasterMesh(const Shape& shape, bool dynamic) override;
+    std::uint32_t ShadowCasterTextureResourceId(Texture* texture) override;
     void PrepareTriangleTL(const MipInfo& mip, const render::LegacySpec& spec) override;
     void PrepareMeshTL(const LightList& lights, const Matrix4& modelToWorld, const render::LegacySpec& spec) override;
     void SetGrassParams(float a1, float a2, float a3 = 0, float a4 = 0) override;
@@ -423,6 +425,20 @@ class EngineVK : public EngineDummy
     std::vector<vk::GpuSceneInstanceVK> _gpuSceneInstances;
     std::vector<vk::GpuSceneBatchVK> _gpuSceneBatches;
     vk::MeshRegistryVK _meshRegistry;
+    // Source-level CSM meshes for shapes that reach the legacy software-T&L
+    // path and therefore have no VertexBufferVK. Buffers are retained by
+    // Shape address. Dynamic shapes refresh their model-space bytes at capture
+    // time; settled static shapes reuse the uploaded allocation unchanged.
+    struct ShadowCasterMeshVK
+    {
+        std::uint32_t resourceId = 0;
+        std::uint32_t vertexCount = 0;
+        std::uint32_t indexCount = 0;
+        vk::BufferVK vertexBuffer;
+        vk::BufferVK indexBuffer;
+    };
+    std::unordered_map<const Shape*, ShadowCasterMeshVK> _shadowCasterMeshes;
+    std::uint32_t _nextMeshResourceId = 2; // 1 is the bootstrap mesh
     std::uint32_t _bootstrapMeshId = 0;
     std::size_t _drawConstantsCapacity = 0;
     std::size_t _gpuSceneInstanceCapacity = 0;
@@ -495,6 +511,8 @@ class EngineVK : public EngineDummy
 
     bool EnsureShadowResources(int res, int layers);
     void DestroyShadowResources();
+    void DestroyShadowCasterMeshes();
+    std::uint32_t AllocateMeshResourceId() noexcept { return _nextMeshResourceId++; }
     void UpdateShadowFrameConstants();
     bool CreateShadowDepthPipeline();
     void RenderShadowDepthFramePlan(const render::frame::Frame& frame);

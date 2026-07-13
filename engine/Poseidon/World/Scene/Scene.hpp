@@ -17,6 +17,9 @@
 
 #include <Poseidon/Foundation/Memory/MemFreeReq.hpp>
 
+#include <cstdint>
+#include <vector>
+
 namespace Poseidon
 {
 const float CloudScale = 0.1;
@@ -216,6 +219,23 @@ class Scene
     mutable SortObjectList _drawMergers;
 
     mutable ShadowCache _shadowCache;
+  public:
+    // Produced while SortObject/Shape source geometry is still available,
+    // before the compatibility software-T&L path flattens it.  The records
+    // contain only backend-neutral opaque resource tokens and model transforms;
+    // SceneExtractor turns them into Frame::shadowInput after ObjectsDrawn.
+    struct ShadowCasterCapture
+    {
+        std::uint32_t meshResourceId = 0;
+        Matrix4 modelToWorld = MIdentity;
+        int indexBegin = 0;
+        int indexCount = 0;
+        bool cutout = false;
+        std::uint32_t alphaTextureResourceId = 0;
+        float alphaCutoff = 0.5f;
+    };
+  private:
+    std::vector<ShadowCasterCapture> _shadowCasterCaptures;
     SRef<Landscape> _landscape; // only pointer to landscape
 
     bool _objectShadows, _vehicleShadows, _cloudlets;
@@ -344,6 +364,11 @@ class Scene
     // the cascade depth maps from the sun.  Lives in SceneShadowPass.cpp to keep
     // Scene.cpp under the file-size limit.  Called from Pass2 when shadow maps are on.
     void RenderShadowMapDepthPass(int nDraw);
+    // Frame-plan counterpart to RenderShadowMapDepthPass.  It walks the same
+    // Shape/Object source data but retains backend mesh resources instead of
+    // flattening vertices for the GL depth stream.
+    void CaptureShadowMapFrameCasters(int nDraw);
+    const std::vector<ShadowCasterCapture>& ShadowCasterCaptures() const { return _shadowCasterCaptures; }
     void DrawObjectsAndShadowsPass3(); // last draw cockpits
     void ObjectsDrawn();               // release all temporary information
 

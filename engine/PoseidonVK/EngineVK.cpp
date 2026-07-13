@@ -1,4 +1,5 @@
 #include <PoseidonVK/EngineVK.hpp>
+#include <PoseidonVK/MeshBuilderVK.hpp>
 
 #include <PoseidonVK/TextBankVK.hpp>
 #include <PoseidonVK/TextureVK.hpp>
@@ -6008,6 +6009,7 @@ void EngineVK::Shutdown()
     if (_device)
     {
         vkDeviceWaitIdle(_device);
+        DestroyShadowCasterMeshes();
         if (_inFlight)
         {
             vkDestroyFence(_device, _inFlight, nullptr);
@@ -6196,6 +6198,80 @@ std::uint32_t GetOrCreateTextureResourceId(Texture* tex)
 AbstractTextBank* EngineVK::TextBank()
 {
     return _textBank;
+}
+
+std::uint32_t EngineVK::ShadowCasterTextureResourceId(Texture* texture)
+{
+    // Use the same live TextureVK/fallback resolution as normal scene draws.
+    // The source collector only carries this opaque id into Frame::shadowInput.
+    return GetOrCreateTextureResourceId(texture);
+}
+
+std::uint32_t EngineVK::RetainShadowCasterMesh(const Shape& shape, bool dynamic)
+{
+    if (!_device || shape.NVertex() <= 0)
+        return 0;
+
+    ShadowCasterMeshVK& mesh = _shadowCasterMeshes[&shape];
+    // This is a retained upload/cache, not a TL-vertex conversion. Static
+    // casters follow the reference collector's invariant: their source pose
+    // does not change, so after the first upload no CPU mesh rebuild occurs.
+    // Dynamic casters rebuild bytes before each depth submission.
+    const bool needsSourceUpload = mesh.resourceId == 0 || dynamic;
+    if (!needsSourceUpload)
+        return mesh.resourceId;
+
+    const vk::MeshBuffersVK source = vk::BuildMeshBuffersVK(shape);
+    if (source.vertices.empty() || source.indices.empty())
+        return 0;
+    const std::uint32_t vertexCount = static_cast<std::uint32_t>(source.vertices.size());
+    const std::uint32_t indexCount = static_cast<std::uint32_t>(source.indices.size());
+    const bool needsAllocation = mesh.resourceId == 0 || mesh.vertexCount != vertexCount || mesh.indexCount != indexCount;
+    if (needsAllocation)
+    {
+        if (mesh.resourceId != 0)
+        {
+            _meshRegistry.Unregister(mesh.resourceId);
+            vk::DestroyBuffer(_device, mesh.vertexBuffer);
+            vk::DestroyBuffer(_device, mesh.indexBuffer);
+        }
+        mesh = ShadowCasterMeshVK{};
+        mesh.resourceId = AllocateMeshResourceId();
+        if (vk::CreateHostVisibleBuffer(_physicalDevice, _device, source.vertices.size() * sizeof(vk::MeshVertexVK),
+                                        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, mesh.vertexBuffer) != VK_SUCCESS ||
+            vk::CreateHostVisibleBuffer(_physicalDevice, _device, source.indices.size() * sizeof(std::uint16_t),
+                                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT, mesh.indexBuffer) != VK_SUCCESS)
+        {
+            vk::DestroyBuffer(_device, mesh.vertexBuffer);
+            vk::DestroyBuffer(_device, mesh.indexBuffer);
+            mesh = ShadowCasterMeshVK{};
+            return 0;
+        }
+        mesh.vertexCount = vertexCount;
+        mesh.indexCount = indexCount;
+    }
+
+    vk::UploadMappedBuffer(mesh.vertexBuffer, source.vertices.data(), source.vertices.size() * sizeof(vk::MeshVertexVK));
+    vk::UploadMappedBuffer(mesh.indexBuffer, source.indices.data(), source.indices.size() * sizeof(std::uint16_t));
+
+    vk::MeshResourcesVK resources;
+    resources.vertexBuffer = mesh.vertexBuffer.buffer;
+    resources.indexBuffer = mesh.indexBuffer.buffer;
+    resources.vertexCount = mesh.vertexCount;
+    resources.indexCount = mesh.indexCount;
+    _meshRegistry.Register(mesh.resourceId, resources);
+    return mesh.resourceId;
+}
+
+void EngineVK::DestroyShadowCasterMeshes()
+{
+    for (auto& entry : _shadowCasterMeshes)
+    {
+        _meshRegistry.Unregister(entry.second.resourceId);
+        vk::DestroyBuffer(_device, entry.second.vertexBuffer);
+        vk::DestroyBuffer(_device, entry.second.indexBuffer);
+    }
+    _shadowCasterMeshes.clear();
 }
 
 VkPipeline EngineVK::GetOrCreateScenePipeline(const render::RenderPassDescriptor& desc)

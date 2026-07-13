@@ -41,9 +41,9 @@ bool VertexBufferVK::Init(EngineVK& engine, const Shape& src, VBType type)
     _dynamic = (type == VBDynamic || type == VBSmallDiscardable);
     _vertexCount = static_cast<std::uint32_t>(src.NVertex());
 
-    // Generate process-local mesh resource ID
-    static std::uint32_t s_nextMeshResourceId = 2; // 1 is reserved for bootstrap
-    _meshResourceId = s_nextMeshResourceId++;
+    // All Vulkan mesh families share one resource-id namespace.  Shadow-only
+    // retained meshes and normal VertexBufferVK meshes must never alias.
+    _meshResourceId = engine.AllocateMeshResourceId();
 
     // Build CPU-side mesh buffers
     const vk::MeshBuffersVK cpuBuffers = vk::BuildMeshBuffersVK(src);

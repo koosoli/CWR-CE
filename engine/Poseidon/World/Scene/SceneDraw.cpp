@@ -1716,10 +1716,17 @@ void Scene::DrawObjectsAndShadowsPass2()
             float sunFactor = 1.0f - _mainLight->NightEffect();
             sunFactor = floatMax(0.0f, floatMin(1.0f, sunFactor));
             GEngine->SetShadowMapSunFactor(sunFactor);
-            // Frame-plan consumers submit the CSM depth phase from the same
-            // recorded mesh capture used for world receivers.  GL continues
-            // using its established collector/renderer path unchanged.
-            if (sunFactor > 0.01f && !GEngine->ConsumesRenderFramePlan())
+            // Frame-plan consumers must capture here, while SortObject/Shape
+            // model geometry still exists.  The demo world's normal draw path
+            // is software-T&L, so the later recorded-draw seam only contains
+            // flattened screen vertices and cannot be a CSM caster source.
+            if (GEngine->ConsumesRenderFramePlan())
+            {
+                CaptureShadowMapFrameCasters(nDraw);
+            }
+            // GL continues using its established flattened collector/renderer
+            // path unchanged.
+            else if (sunFactor > 0.01f)
             {
                 RenderShadowMapDepthPass(nDraw);
             }

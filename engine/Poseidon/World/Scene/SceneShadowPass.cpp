@@ -38,6 +38,105 @@ int LastShadowProxyVertCount()
 namespace Poseidon
 {
 
+// Frame-plan CSM source capture.  Keep this separate from the GL stream
+// collector below: frame-plan backends retain the Shape mesh and model
+// transform, rather than trying to recover a caster from software-T&L output.
+void Scene::CaptureShadowMapFrameCasters(int nDraw)
+{
+    namespace sm = Poseidon::shadow;
+    _shadowCasterCaptures.clear();
+    if (!GEngine || !_camera || !_mainLight || 1.0f - _mainLight->NightEffect() <= 0.01f)
+        return;
+
+    const Engine::ShadowMapTuning tuning = GEngine->GetShadowMapTuning();
+    const float shadowFar = _camera->ClipNear() + tuning.distanceCoef * (ENGINE_CONFIG.shadowsZ - _camera->ClipNear());
+    const float casterMaxDistance2 = Square(shadowFar);
+    const int skipMask = NoShadow | ShadowDisabled | IsHidden | IsHiddenProxy;
+    const int alphaMask = IsAlpha | IsTransparent;
+
+    // MeshBuilderVK indexes every source face in fan order.  Advance through
+    // skipped faces too, so the capture ranges address its actual index buffer.
+    auto appendShape = [&](Shape* shape, const Matrix4& modelToWorld, bool dynamic)
+    {
+        if (!shape || shape->NPos() <= 0)
+            return;
+        const std::uint32_t meshId = GEngine->RetainShadowCasterMesh(*shape, dynamic);
+        if (meshId == 0)
+            return;
+
+        int firstIndex = 0;
+        for (Offset o = shape->BeginFaces(); o < shape->EndFaces(); shape->NextFace(o))
+        {
+            const Poly& face = shape->Face(o);
+            const int indexCount = face.N() >= 3 ? (face.N() - 2) * 3 : 0;
+            sm::CasterMode mode = sm::ClassifyShadowCaster(face.Special(), skipMask, alphaMask);
+            Texture* texture = face.GetTexture();
+            // Same fallback as the GL collector: without a texture there is no
+            // alpha test, so this face still casts solid depth.
+            if (mode == sm::CasterMode::AlphaTest && !texture)
+                mode = sm::CasterMode::Solid;
+            if (indexCount > 0 && mode != sm::CasterMode::Skip)
+            {
+                ShadowCasterCapture capture;
+                capture.meshResourceId = meshId;
+                capture.modelToWorld = modelToWorld;
+                capture.indexBegin = firstIndex;
+                capture.indexCount = indexCount;
+                capture.cutout = mode == sm::CasterMode::AlphaTest;
+                capture.alphaTextureResourceId =
+                    capture.cutout ? GEngine->ShadowCasterTextureResourceId(texture) : 0;
+                capture.alphaCutoff = 0.5f; // EngineGL33 shadow alpha cutoff
+                _shadowCasterCaptures.push_back(capture);
+            }
+            firstIndex += indexCount;
+        }
+    };
+
+    for (int i = 0; i < nDraw; ++i)
+    {
+        SortObject* oi = _drawMergers[i];
+        if (!oi || !oi->object || !oi->shape || oi->distance2 > casterMaxDistance2)
+            continue;
+        if ((oi->shape->Special() & NoShadow) || !oi->object->CastShadow())
+            continue;
+
+        int geomLOD = oi->drawLOD != LOD_INVISIBLE ? oi->drawLOD : oi->shadowLOD;
+        if (geomLOD == LOD_INVISIBLE)
+            continue;
+        if (tuning.casterLodBias > 1.0f)
+        {
+            const int coarser = LevelFromDistance2(oi->shape, oi->distance2 * Square(tuning.casterLodBias),
+                                                   oi->object->Scale(), oi->object->Direction(), _camera->Direction());
+            if (coarser != LOD_INVISIBLE && coarser > geomLOD)
+                geomLOD = coarser;
+        }
+
+        Shape* shape = oi->shape->LevelOpaque(geomLOD);
+        if (!shape || shape->NPos() <= 0)
+            continue;
+        appendShape(shape, oi->object->Transform(), !oi->object->Static());
+
+        // The parent mesh has only an IsHiddenProxy placeholder.  Capture the
+        // substituted weapon/crew mesh and composed proxy transform instead.
+        Object* object = oi->object;
+        for (int proxyIndex = 0; proxyIndex < object->GetProxyCount(geomLOD); ++proxyIndex)
+        {
+            if (!object->CastProxyShadow(geomLOD, proxyIndex))
+                continue;
+            Matrix4 proxyTransform = object->Transform();
+            Matrix4 proxyInverse = object->GetInvTransform();
+            LODShapeWithShadow* proxyShape = nullptr;
+            Object* proxy = object->GetProxy(proxyShape, geomLOD, proxyTransform, proxyInverse, *object, proxyIndex);
+            if (!proxy || !proxyShape)
+                continue;
+            const int proxyLOD = LevelFromDistance2(proxyShape, proxyTransform.Position().Distance2(_camera->Position()),
+                                                    proxyTransform.Scale(), proxyTransform.Direction(), _camera->Direction());
+            if (proxyLOD != LOD_INVISIBLE)
+                appendShape(proxyShape->LevelOpaque(proxyLOD), proxyTransform, !object->Static());
+        }
+    }
+}
+
 // World-space caster-vert cache for STATIC casters. Re-walking every visible
 // caster's faces and re-transforming ~450k verts to camera-relative each frame
 // cost 4.1 ms CPU in a battle scene; statics never change pose, so their world

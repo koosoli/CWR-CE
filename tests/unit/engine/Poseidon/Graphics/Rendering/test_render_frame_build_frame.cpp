@@ -409,6 +409,24 @@ TEST_CASE("Frame/BuildFrame: CSM depth schedules before receivers without cleari
     REQUIRE(Poseidon::render::frame::ValidateFrame(f).ok());
 }
 
+TEST_CASE("Frame/BuildFrame: CSM depth requires a retained source mesh", "[render-frame][build-frame][shadow]")
+{
+    auto s = makeMinimal();
+    s.flags.shadowsEnabled = true;
+    s.shadowInput.enabled = true;
+    s.shadowInput.sunFactor = 1.0f;
+    // A source capture whose backend upload failed must not advertise a depth
+    // pass.  Screen-TL output is deliberately not a fallback mesh token.
+    Poseidon::render::frame::ShadowCaster unavailable;
+    unavailable.indexCount = 3;
+    s.shadowInput.casters.push_back(unavailable);
+    s.worldOpaqueDraws.push_back(makeDraw());
+
+    const auto f = Poseidon::render::frame::BuildFrame(s);
+    REQUIRE(f.passes.size() == 1);
+    CHECK(f.passes[0].kind == Poseidon::render::frame::FramePassKind::WorldOpaque);
+}
+
 TEST_CASE("Frame/BuildFrame: full canonical-order frame with all 7 emittable passes",
           "[render-frame][build-frame][E.8]")
 {
