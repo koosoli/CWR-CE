@@ -491,7 +491,7 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
     }
 
     if (!CreateInstance() || !CreateDebugMessenger() || !CreateSurface() || !PickPhysicalDevice() || !CreateDevice() ||
-        !CreateFrameConstantsBuffer() || !CreateBootstrapVertexBuffer() || !CreateBootstrapIndexBuffer() ||
+        !CreateGpuTimingResources() || !CreateFrameConstantsBuffer() || !CreateBootstrapVertexBuffer() || !CreateBootstrapIndexBuffer() ||
          !CreateSceneVertexBuffer() || !CreateSceneIndexBuffer() || !EnsureDrawConstantsBufferCapacity(1) ||
          !CreateFrameDescriptorLayout() || !CreateTextureDescriptorLayout() ||
           (_volumetricCloudsEnabled && !CreateVolumetricCloudDescriptorLayout()) ||
@@ -777,6 +777,7 @@ bool EngineVK::PickPhysicalDevice()
         VkPhysicalDeviceProperties selectedProps{};
         vkGetPhysicalDeviceProperties(device, &selectedProps);
         _maxSamplerAnisotropy = selectedProps.limits.maxSamplerAnisotropy;
+        _timestampPeriodNs = selectedProps.limits.timestampPeriod;
 
         LOG_INFO(Graphics, "Vulkan: selected device '{}' (max anisotropy {})", selectedProps.deviceName,
                  _maxSamplerAnisotropy);
@@ -1765,7 +1766,7 @@ bool EngineVK::CreateWorldTarget()
                       VK_IMAGE_ASPECT_COLOR_BIT, _worldColorImage, _worldColorImageMemory, _worldColorImageView,
                       _hdrEnabled ? "PoseidonVK World HDR Color" : "PoseidonVK World UNORM Color") ||
         !createImage(_depthFormat,
-                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
                      VK_IMAGE_ASPECT_DEPTH_BIT, _worldDepthImage, _worldDepthImageMemory, _worldDepthImageView,
                      "PoseidonVK World Depth"))
     {
@@ -3031,6 +3032,47 @@ void EngineVK::UploadFrameConstants()
     vk::UploadMappedBuffer(_frameConstantsBuffer, &_lastFrameConstants, sizeof(_lastFrameConstants));
 }
 
+bool EngineVK::CreateGpuTimingResources()
+{
+    VkQueryPoolCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+    info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    info.queryCount = 7;
+    return vkCreateQueryPool(_device, &info, nullptr, &_gpuTimingQueryPool) == VK_SUCCESS;
+}
+
+void EngineVK::DestroyGpuTimingResources()
+{
+    if (_gpuTimingQueryPool)
+        vkDestroyQueryPool(_device, _gpuTimingQueryPool, nullptr);
+    _gpuTimingQueryPool = VK_NULL_HANDLE;
+    _gpuTimingPending = false;
+}
+
+void EngineVK::LogGpuTimings()
+{
+    if (!_gpuTimingPending || !_gpuTimingQueryPool || _timestampPeriodNs <= 0.0f)
+        return;
+
+    std::array<std::uint64_t, 7> timestamps{};
+    const VkResult result = vkGetQueryPoolResults(_device, _gpuTimingQueryPool, 0,
+                                                   static_cast<uint32_t>(timestamps.size()), sizeof(timestamps),
+                                                   timestamps.data(), sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT);
+    if (result != VK_SUCCESS)
+        return;
+
+    _gpuTimingPending = false;
+    if (++_gpuTimingFrameCount % 300 != 1)
+        return;
+
+    const auto elapsedMs = [&](std::size_t begin, std::size_t end)
+    {
+        return static_cast<double>(timestamps[end] - timestamps[begin]) * _timestampPeriodNs * 1e-6;
+    };
+    LOG_INFO(Graphics, "Vulkan GPU ms: world={:.2f} clouds={:.2f} compositor={:.2f} present={:.2f}",
+             elapsedMs(0, 3), elapsedMs(1, 2), elapsedMs(4, 5), elapsedMs(4, 6));
+}
+
 bool EngineVK::UploadDrawConstants()
 {
     if (_lastDrawConstants.empty())
@@ -3076,6 +3118,11 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     {
         LOG_ERROR(Graphics, "Vulkan: vkBeginCommandBuffer failed: {}", VkResultName(result));
         return false;
+    }
+    if (_gpuTimingQueryPool)
+    {
+        vkCmdResetQueryPool(commandBuffer, _gpuTimingQueryPool, 0, 7);
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, _gpuTimingQueryPool, 0);
     }
 
     BeginDebugLabel(commandBuffer, WorldCompositionActive() ? "PoseidonVK World Render Pass"
@@ -3385,6 +3432,8 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     recordSceneDraws(SceneGroup::WorldBase);
     if (WorldCompositionActive())
     {
+        if (_gpuTimingQueryPool)
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 1);
         vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
         if (_volumetricCloudsEnabled && _volumetricCloudPipeline && _volumetricCloudDescriptorSet && _hasFrameConstants)
         {
@@ -3396,9 +3445,13 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
             vkCmdDraw(commandBuffer, 3, 1, 0, 0);
             EndDebugLabel(commandBuffer);
         }
+        if (_gpuTimingQueryPool)
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 2);
         vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
         recordSceneDraws(SceneGroup::WorldLate);
         vkCmdEndRenderPass(commandBuffer);
+        if (_gpuTimingQueryPool)
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 3);
         EndDebugLabel(commandBuffer);
 
         // Keep briefing/control objects and HUD out of the world target. They are
@@ -3408,6 +3461,8 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         renderPassInfo.renderPass = _presentRenderPass;
         renderPassInfo.framebuffer = _framebuffers[imageIndex];
         vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        if (_gpuTimingQueryPool)
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, _gpuTimingQueryPool, 4);
         if (_worldCompositePipeline && _worldCompositeDescriptorSet)
         {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _worldCompositePipeline);
@@ -3418,10 +3473,14 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                                sizeof(constants), &constants);
             vkCmdDraw(commandBuffer, 3, 1, 0, 0);
         }
+        if (_gpuTimingQueryPool)
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 5);
         recordSceneDraws(SceneGroup::Present);
     }
     RecordScreenDraws(commandBuffer, vk::ScreenDrawPhaseVK::Overlay);
     vkCmdEndRenderPass(commandBuffer);
+    if (_gpuTimingQueryPool && WorldCompositionActive())
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 6);
 
     EndDebugLabel(commandBuffer);
 
@@ -3696,6 +3755,7 @@ void EngineVK::PresentBootstrapFrame()
         return;
 
     vkWaitForFences(_device, 1, &_inFlight, VK_TRUE, UINT64_MAX);
+    LogGpuTimings();
 
     uint32_t imageIndex = 0;
     VkResult result =
@@ -3734,6 +3794,7 @@ void EngineVK::PresentBootstrapFrame()
         RecreateSignaledFence(_device, _inFlight);
         return;
     }
+    _gpuTimingPending = _gpuTimingQueryPool != VK_NULL_HANDLE && WorldCompositionActive();
     VkPresentInfoKHR presentInfo{};
     presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     presentInfo.waitSemaphoreCount = 1;
@@ -3812,6 +3873,7 @@ void EngineVK::Shutdown()
         DestroyScreenPipelineLayout();
         DestroyScreenDescriptorResources();
         DestroyScreenVertexBuffer();
+        DestroyGpuTimingResources();
         vkDestroyDevice(_device, nullptr);
         _device = VK_NULL_HANDLE;
     }

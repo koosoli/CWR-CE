@@ -37,12 +37,14 @@ The Vulkan backend has an opt-in world-composition path for local smoke tests:
   exposure. Legacy briefing pages, cockpit, HUD, and other display-referred UI
   are composed after tone mapping.
 - Exposure uses stable camera-to-sun angular metering. Foreground-object sun
-  occlusion requires a future depth-sampled visibility pass.
+  occlusion remains future work because it needs a validated projected
+  visibility mask rather than a centre-depth approximation.
 
 This path remains experimental. It does not yet provide temporal eye adaptation,
-a dedicated low-resolution bloom chain, lens flare, dynamic resolution, or
-representative GPU timing data. It is therefore not expected to match the frame
-rate or renderer maturity of the reference GL33 path or related renderer forks.
+a dedicated low-resolution bloom chain, lens flare, or dynamic resolution.
+GPU timing shows the compositor costs about 0.06 ms in the Demo while world
+rasterization and clouds dominate, so the current frame rate is not expected to
+match the renderer maturity of the reference GL33 path or related renderer forks.
 
 ## Modernization Goals
 

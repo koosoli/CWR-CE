@@ -47,9 +47,6 @@ void main()
     vec3 sunRay = normalize(-frame.sunDirection.xyz);
     float sunInView = smoothstep(0.94, 0.9985, dot(vCentreWorldRay, sunRay));
 
-    // Exact foreground occlusion requires a depth-sampled sun-visibility pass.
-    // Until that exists, retain the stable angular meter rather than reject a
-    // valid sun because this legacy camera matrix has no shared clip convention.
     float eyeExposure = mix(composite.exposure, composite.exposure * 0.30, sunInView);
 
     // Fused bright-pass bloom. Two wider rings make the HDR sun radiance

@@ -134,6 +134,9 @@ class EngineVK : public EngineDummy
     bool CreateWorldCompositeDescriptorSet();
     bool CreateWorldCompositePipelineLayout();
     bool CreateWorldCompositePipeline();
+    bool CreateGpuTimingResources();
+    void DestroyGpuTimingResources();
+    void LogGpuTimings();
     bool WorldCompositionActive() const;
     VkFormat FindDepthFormat() const;
     bool CreateBootstrapPipeline();
@@ -275,6 +278,7 @@ class EngineVK : public EngineDummy
     std::vector<VkSemaphore> _renderFinished;
     VkSemaphore _imageAvailable = VK_NULL_HANDLE;
     VkFence _inFlight = VK_NULL_HANDLE;
+    VkQueryPool _gpuTimingQueryPool = VK_NULL_HANDLE;
     uint32_t _graphicsQueueFamily = UINT32_MAX;
     uint32_t _presentQueueFamily = UINT32_MAX;
 
@@ -290,6 +294,9 @@ class EngineVK : public EngineDummy
     bool _volumetricCloudsEnabled = false;
     bool _hdrEnabled = false;
     float _hdrExposure = 1.0f;
+    float _timestampPeriodNs = 0.0f;
+    bool _gpuTimingPending = false;
+    std::uint32_t _gpuTimingFrameCount = 0;
     vk::FrameConstantsVK _lastFrameConstants = {};
     std::vector<vk::DrawConstantsVK> _lastDrawConstants;
     std::vector<vk::SceneDrawCommandVK> _lastSceneDrawCommands;
