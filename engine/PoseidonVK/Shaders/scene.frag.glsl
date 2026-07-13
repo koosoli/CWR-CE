@@ -173,7 +173,12 @@ void main()
     // Texture samples
     // -----------------------------------------------------------------------
     vec4 c0 = texture(tex0, vTexcoord0);
-    vec4 c1 = texture(tex1, vTexcoord1);
+    // Most terrain/model/cutout materials use only tex0. Sampling tex1 only
+    // for the three shader families that consume it avoids a full-screen
+    // second texture read for the common path.
+    vec4 c1 = vec4(1.0);
+    if (family == kFamilyDetail || family == kFamilyGrass || family == kFamilyWater)
+        c1 = texture(tex1, vTexcoord1);
 
     // -----------------------------------------------------------------------
     // Shader-family blending

@@ -74,7 +74,7 @@ float Density(vec3 worldPos)
 float LightTransmittance(vec3 worldPos, vec3 lightDirection)
 {
     float opticalDepth = 0.0;
-    for (int i = 1; i <= 5; ++i)
+    for (int i = 1; i <= 3; ++i)
         opticalDepth += Density(worldPos + lightDirection * (float(i) * 180.0)) * 0.24;
     return exp(-opticalDepth);
 }
@@ -102,7 +102,9 @@ void main()
     if (exit <= entry)
         discard;
 
-    const int steps = 40;
+    // The experimental cloud pass is full resolution. Keep its raymarch
+    // budget bounded so scene rasterization remains the primary GPU cost.
+    const int steps = 28;
     float stepLength = (exit - entry) / float(steps);
     float transmittance = 1.0;
     vec3 scattering = vec3(0.0);

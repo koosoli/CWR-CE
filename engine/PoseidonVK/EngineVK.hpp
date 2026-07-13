@@ -14,6 +14,7 @@
 #include <Poseidon/Graphics/Shared/WindowMode.hpp>
 #include <vulkan/vulkan.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -300,6 +301,7 @@ class EngineVK : public EngineDummy
     vk::FrameConstantsVK _lastFrameConstants = {};
     std::vector<vk::DrawConstantsVK> _lastDrawConstants;
     std::vector<vk::SceneDrawCommandVK> _lastSceneDrawCommands;
+    std::array<std::vector<std::uint32_t>, 3> _sceneCommandGroups;
     vk::MeshRegistryVK _meshRegistry;
     std::uint32_t _bootstrapMeshId = 0;
     std::size_t _drawConstantsCapacity = 0;

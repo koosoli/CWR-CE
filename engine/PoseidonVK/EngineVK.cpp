@@ -77,6 +77,13 @@ struct WorldCompositePushConstants
 
 static_assert(sizeof(WorldCompositePushConstants) == 8);
 
+enum class SceneGroup : std::uint32_t
+{
+    WorldBase,
+    WorldLate,
+    Present,
+};
+
 render::RenderPassDescriptor ScreenDescriptorFromLegacySpec(int specFlags)
 {
     render::BuildContext context;
@@ -593,6 +600,42 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
 
     _lastDrawConstants = vk::BuildDrawConstants(frame);
     _lastSceneDrawCommands = vk::BuildSceneDrawCommands(_lastDrawConstants);
+    for (auto& group : _sceneCommandGroups)
+    {
+        group.clear();
+        group.reserve(_lastSceneDrawCommands.size());
+    }
+    for (std::uint32_t commandIndex = 0; commandIndex < _lastSceneDrawCommands.size(); ++commandIndex)
+    {
+        const vk::SceneDrawCommandVK& command = _lastSceneDrawCommands[commandIndex];
+        const auto pass = static_cast<render::PassKind>(_lastDrawConstants[command.drawIndex].pass);
+        SceneGroup group = SceneGroup::WorldBase;
+        if (WorldCompositionActive())
+        {
+            switch (pass)
+            {
+                case render::PassKind::WorldTransparent:
+                case render::PassKind::WorldLight:
+                    group = SceneGroup::WorldLate;
+                    break;
+                case render::PassKind::CockpitOpaque:
+                case render::PassKind::CockpitCutout:
+                case render::PassKind::CockpitTransparent:
+                case render::PassKind::ScreenSpace3D:
+                    group = SceneGroup::Present;
+                    break;
+                case render::PassKind::Sky:
+                case render::PassKind::TerrainOpaque:
+                case render::PassKind::WorldOpaque:
+                case render::PassKind::WorldCutout:
+                case render::PassKind::SurfaceOverlay:
+                case render::PassKind::WorldWater:
+                case render::PassKind::WorldShadow:
+                    break;
+            }
+        }
+        _sceneCommandGroups[static_cast<std::uint32_t>(group)].push_back(commandIndex);
+    }
     _hasFrameConstants = true;
 
     // Log summary once per second (every 60 frames) to avoid console spam
@@ -3187,12 +3230,6 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                            &hdrEnabled);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
     }
-    enum class SceneGroup
-    {
-        WorldBase,
-        WorldLate,
-        Present,
-    };
     auto recordSceneDraws = [&](SceneGroup group)
     {
         const VkPipeline fallbackScenePipeline = group == SceneGroup::WorldLate   ? _worldLateScenePipeline
@@ -3212,42 +3249,19 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                                     &_frameDescriptorSet, 0, nullptr);
         }
 
-        if (!_lastSceneDrawCommands.empty())
+        const auto& groupCommands = _sceneCommandGroups[static_cast<std::uint32_t>(group)];
+        if (!groupCommands.empty())
         {
             VkDescriptorSet lastBoundTexDescriptorSet = VK_NULL_HANDLE;
             VkDescriptorSet lastBoundTex1DescriptorSet = VK_NULL_HANDLE;
             VkBuffer lastBoundVertexBuffer = VK_NULL_HANDLE;
             VkBuffer lastBoundIndexBuffer = VK_NULL_HANDLE;
             int logEveryN = 100;
-            for (const vk::SceneDrawCommandVK& command : _lastSceneDrawCommands)
+            for (std::uint32_t commandIndex : groupCommands)
             {
                 vk::PipelineKeyVK key;
+                const vk::SceneDrawCommandVK& command = _lastSceneDrawCommands[commandIndex];
                 const vk::DrawConstantsVK& draw = _lastDrawConstants[command.drawIndex];
-                const auto pass = static_cast<render::PassKind>(draw.pass);
-                SceneGroup drawGroup = SceneGroup::WorldBase;
-                switch (pass)
-                {
-                    case render::PassKind::WorldTransparent:
-                    case render::PassKind::WorldLight:
-                        drawGroup = SceneGroup::WorldLate;
-                        break;
-                    case render::PassKind::CockpitOpaque:
-                    case render::PassKind::CockpitCutout:
-                    case render::PassKind::CockpitTransparent:
-                    case render::PassKind::ScreenSpace3D:
-                        drawGroup = SceneGroup::Present;
-                        break;
-                    case render::PassKind::Sky:
-                    case render::PassKind::TerrainOpaque:
-                    case render::PassKind::WorldOpaque:
-                    case render::PassKind::WorldCutout:
-                    case render::PassKind::SurfaceOverlay:
-                    case render::PassKind::WorldWater:
-                    case render::PassKind::WorldShadow:
-                        break;
-                }
-                if (WorldCompositionActive() && drawGroup != group)
-                    continue;
 
                 // Log first few draws and any with missing resources
                 static std::uint32_t s_loggedDrawIdx = 0;

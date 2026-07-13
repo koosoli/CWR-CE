@@ -21,7 +21,7 @@ This project is not an official Bohemia Interactive product.
 
 ## Current Preview
 
-![PoseidonVK Vulkan 1.3 smoke-test screenshot showing in-game terrain, vehicles, and HUD](Screenshots/2.png)
+![PoseidonVK Vulkan smoke-test screenshot showing the experimental procedural sky and volumetric clouds](Screenshots/3.png)
 
 Current Vulkan 1.3 smoke-test screenshot using separate demo game data. The
 Vulkan backend is in active raster-parity work and can render the full game
