@@ -106,6 +106,12 @@ constexpr const char kScreenVertexShader[] =
 constexpr const char kScreenFragmentShader[] =
 #include <PoseidonVK/Shaders/screen.frag.glsl.hpp>
     ;
+constexpr const char kTonemapVertexShader[] =
+#include <PoseidonVK/Shaders/tonemap.vert.glsl.hpp>
+    ;
+constexpr const char kTonemapFragmentShader[] =
+#include <PoseidonVK/Shaders/tonemap.frag.glsl.hpp>
+    ;
 
 // Scene mesh vertex matching the SVertex contract (pos, norm, uv) consumed by
 // vsTransform / scene.vert. Laid out so vk::MakeSceneVertex*Description()
@@ -275,8 +281,7 @@ uint64_t VulkanObjectHandle(Handle handle)
 
 VkSurfaceFormatKHR ChooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& formats)
 {
-    // Use UNORM swapchain to avoid double-gamma (textures are already sRGB).
-    // A partial gamma boost is applied in the fragment shaders to compensate.
+    // The compositor performs display encoding before writing to this UNORM swapchain.
     for (const VkSurfaceFormatKHR& format : formats)
     {
         if (format.format == VK_FORMAT_B8G8R8A8_UNORM && format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
@@ -452,8 +457,9 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
         !CreateSceneVertexBuffer() || !CreateSceneIndexBuffer() || !EnsureDrawConstantsBufferCapacity(1) ||
         !CreateFrameDescriptorLayout() || !CreateTextureDescriptorLayout() || !CreatePipelineLayout() ||
         !CreateTextureDescriptorPool() || !CreateScenePipelineLayout() || !CreateFrameDescriptorSet() ||
-        !CreateCommandPool() || !CreateSwapchain() || !CreateBootstrapPipeline() || !CreateScenePipeline() ||
-        !CreateScreenDescriptorLayout() || !CreateScreenPipelineLayout() || !CreateScreenPipeline() ||
+         !CreateCommandPool() || !CreateSwapchain() || !CreateBootstrapPipeline() || !CreateScenePipeline() ||
+         !CreateScreenDescriptorLayout() || !CreateScreenPipelineLayout() || !CreateScreenPipeline() ||
+         !CreateCompositeResources() || !CreateOverlayPipeline() ||
         !CreateSyncObjects())
     {
         Shutdown();
@@ -1270,31 +1276,39 @@ bool EngineVK::CreateSwapchain()
     _swapchainFormat = surfaceFormat.format;
     _swapchainExtent = extent;
 
-    VkAttachmentDescription attachments[2]{};
-    attachments[0].format = _swapchainFormat;
-    attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
     const VkFormat depthFormat = FindDepthFormat();
     if (depthFormat == VK_FORMAT_UNDEFINED)
     {
         LOG_ERROR(Graphics, "Vulkan: no supported depth format for render pass");
         return false;
     }
+    VkFormatProperties hdrProperties{};
+    vkGetPhysicalDeviceFormatProperties(_physicalDevice, VK_FORMAT_R16G16B16A16_SFLOAT, &hdrProperties);
+    const VkFormatFeatureFlags hdrFeatures = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    if ((hdrProperties.optimalTilingFeatures & hdrFeatures) != hdrFeatures)
+    {
+        LOG_ERROR(Graphics, "Vulkan: R16G16B16A16_SFLOAT lacks color-attachment or sampled-image support");
+        return false;
+    }
     _depthFormat = depthFormat;
-    attachments[1].format = depthFormat;
-    attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentDescription sceneAttachments[2]{};
+    sceneAttachments[0].format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    sceneAttachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    sceneAttachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    sceneAttachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    sceneAttachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    sceneAttachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    sceneAttachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    sceneAttachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    sceneAttachments[1].format = depthFormat;
+    sceneAttachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    sceneAttachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    sceneAttachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    sceneAttachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    sceneAttachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    sceneAttachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    sceneAttachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference colorAttachmentRef{};
     colorAttachmentRef.attachment = 0;
@@ -1310,31 +1324,76 @@ bool EngineVK::CreateSwapchain()
     subpass.pColorAttachments = &colorAttachmentRef;
     subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
-    VkSubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask =
+    VkSubpassDependency sceneDependencies[2]{};
+    sceneDependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    sceneDependencies[0].dstSubpass = 0;
+    sceneDependencies[0].srcStageMask =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstStageMask =
+    sceneDependencies[0].dstStageMask =
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    sceneDependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    sceneDependencies[1].srcSubpass = 0;
+    sceneDependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    sceneDependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    sceneDependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    sceneDependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    sceneDependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
 
     VkRenderPassCreateInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     renderPassInfo.attachmentCount = 2;
-    renderPassInfo.pAttachments = attachments;
+    renderPassInfo.pAttachments = sceneAttachments;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = 1;
-    renderPassInfo.pDependencies = &dependency;
+    renderPassInfo.dependencyCount = 2;
+    renderPassInfo.pDependencies = sceneDependencies;
 
     result = vkCreateRenderPass(_device, &renderPassInfo, nullptr, &_renderPass);
     if (result != VK_SUCCESS)
     {
-        LOG_ERROR(Graphics, "Vulkan: vkCreateRenderPass failed: {}", VkResultName(result));
+        LOG_ERROR(Graphics, "Vulkan: HDR scene render pass creation failed: {}", VkResultName(result));
         return false;
     }
-    SetObjectName(VK_OBJECT_TYPE_RENDER_PASS, VulkanObjectHandle(_renderPass), "PoseidonVK Bootstrap Render Pass");
+    SetObjectName(VK_OBJECT_TYPE_RENDER_PASS, VulkanObjectHandle(_renderPass), "PoseidonVK HDR Scene Render Pass");
+
+    VkAttachmentDescription compositeAttachment{};
+    compositeAttachment.format = _swapchainFormat;
+    compositeAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    compositeAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    compositeAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    compositeAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    compositeAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    compositeAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    compositeAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    VkAttachmentReference compositeColorRef{};
+    compositeColorRef.attachment = 0;
+    compositeColorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkSubpassDescription compositeSubpass{};
+    compositeSubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    compositeSubpass.colorAttachmentCount = 1;
+    compositeSubpass.pColorAttachments = &compositeColorRef;
+    VkSubpassDependency compositeDependency{};
+    compositeDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    compositeDependency.dstSubpass = 0;
+    compositeDependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    compositeDependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    compositeDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    VkRenderPassCreateInfo compositePassInfo{};
+    compositePassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    compositePassInfo.attachmentCount = 1;
+    compositePassInfo.pAttachments = &compositeAttachment;
+    compositePassInfo.subpassCount = 1;
+    compositePassInfo.pSubpasses = &compositeSubpass;
+    compositePassInfo.dependencyCount = 1;
+    compositePassInfo.pDependencies = &compositeDependency;
+    result = vkCreateRenderPass(_device, &compositePassInfo, nullptr, &_compositeRenderPass);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: composite render pass creation failed: {}", VkResultName(result));
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_RENDER_PASS, VulkanObjectHandle(_compositeRenderPass),
+                  "PoseidonVK Present Composite Render Pass");
 
     uint32_t actualImageCount = 0;
     vkGetSwapchainImagesKHR(_device, _swapchain, &actualImageCount, nullptr);
@@ -1375,15 +1434,59 @@ bool EngineVK::CreateSwapchain()
     if (!CreateDepthResources())
         return false;
 
+    result = vk::CreateImage2D(_physicalDevice, _device, _swapchainExtent.width, _swapchainExtent.height, 1,
+                               VK_FORMAT_R16G16B16A16_SFLOAT,
+                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                               VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, _hdrSceneImage);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: HDR scene image creation failed: {}", VkResultName(result));
+        return false;
+    }
+    VkSamplerCreateInfo hdrSamplerInfo{};
+    hdrSamplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    hdrSamplerInfo.magFilter = VK_FILTER_LINEAR;
+    hdrSamplerInfo.minFilter = VK_FILTER_LINEAR;
+    hdrSamplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    hdrSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    hdrSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    hdrSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    hdrSamplerInfo.maxLod = 0.0f;
+    result = vkCreateSampler(_device, &hdrSamplerInfo, nullptr, &_hdrSceneSampler);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: HDR scene sampler creation failed: {}", VkResultName(result));
+        return false;
+    }
+    VkImageView sceneAttachmentsViews[] = {_hdrSceneImage.view, _depthImageView};
+    VkFramebufferCreateInfo sceneFramebufferInfo{};
+    sceneFramebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    sceneFramebufferInfo.renderPass = _renderPass;
+    sceneFramebufferInfo.attachmentCount = 2;
+    sceneFramebufferInfo.pAttachments = sceneAttachmentsViews;
+    sceneFramebufferInfo.width = _swapchainExtent.width;
+    sceneFramebufferInfo.height = _swapchainExtent.height;
+    sceneFramebufferInfo.layers = 1;
+    result = vkCreateFramebuffer(_device, &sceneFramebufferInfo, nullptr, &_sceneFramebuffer);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: HDR scene framebuffer creation failed: {}", VkResultName(result));
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_IMAGE, VulkanObjectHandle(_hdrSceneImage.image), "PoseidonVK HDR Scene Image");
+    SetObjectName(VK_OBJECT_TYPE_IMAGE_VIEW, VulkanObjectHandle(_hdrSceneImage.view), "PoseidonVK HDR Scene Image View");
+    SetObjectName(VK_OBJECT_TYPE_SAMPLER, VulkanObjectHandle(_hdrSceneSampler), "PoseidonVK HDR Scene Sampler");
+    SetObjectName(VK_OBJECT_TYPE_FRAMEBUFFER, VulkanObjectHandle(_sceneFramebuffer), "PoseidonVK HDR Scene Framebuffer");
+
     _framebuffers.resize(actualImageCount, VK_NULL_HANDLE);
     for (uint32_t i = 0; i < actualImageCount; ++i)
     {
-        VkImageView attachments[] = {_swapchainImageViews[i], _depthImageView};
+        VkImageView attachments[] = {_swapchainImageViews[i]};
 
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass = _renderPass;
-        framebufferInfo.attachmentCount = 2;
+        framebufferInfo.renderPass = _compositeRenderPass;
+        framebufferInfo.attachmentCount = 1;
         framebufferInfo.pAttachments = attachments;
         framebufferInfo.width = _swapchainExtent.width;
         framebufferInfo.height = _swapchainExtent.height;
@@ -1396,7 +1499,7 @@ bool EngineVK::CreateSwapchain()
             return false;
         }
 
-        const std::string name = "PoseidonVK Framebuffer " + std::to_string(i);
+        const std::string name = "PoseidonVK Present Framebuffer " + std::to_string(i);
         SetObjectName(VK_OBJECT_TYPE_FRAMEBUFFER, VulkanObjectHandle(_framebuffers[i]), name.c_str());
     }
 
@@ -2086,6 +2189,175 @@ bool EngineVK::CreateScreenPipeline()
     return true;
 }
 
+bool EngineVK::CreateCompositeResources()
+{
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    poolSize.descriptorCount = 1;
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    VkResult result = vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_compositeDescriptorPool);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: composite descriptor pool creation failed: {}", VkResultName(result));
+        return false;
+    }
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = _compositeDescriptorPool;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &_screenDescriptorSetLayout;
+    result = vkAllocateDescriptorSets(_device, &allocInfo, &_compositeDescriptorSet);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: composite descriptor set allocation failed: {}", VkResultName(result));
+        return false;
+    }
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = _hdrSceneSampler;
+    imageInfo.imageView = _hdrSceneImage.view;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = _compositeDescriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(_device, 1, &write, 0, nullptr);
+    SetObjectName(VK_OBJECT_TYPE_DESCRIPTOR_POOL, VulkanObjectHandle(_compositeDescriptorPool),
+                  "PoseidonVK Composite Descriptor Pool");
+    return true;
+}
+
+bool EngineVK::CreateOverlayPipeline()
+{
+    if (!_screenVertexModule || !_screenFragmentModule || !_compositeRenderPass)
+        return false;
+
+    VkPipelineShaderStageCreateInfo screenStages[2]{};
+    screenStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    screenStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    screenStages[0].module = _screenVertexModule;
+    screenStages[0].pName = "main";
+    screenStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    screenStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    screenStages[1].module = _screenFragmentModule;
+    screenStages[1].pName = "main";
+
+    const VkVertexInputBindingDescription vertexBinding = vk::MakeScreenVertexBindingDescription();
+    const std::array<VkVertexInputAttributeDescription, vk::kScreenVertexAttributeCount> vertexAttributes =
+        vk::MakeScreenVertexAttributeDescriptions();
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &vertexBinding;
+    vertexInput.vertexAttributeDescriptionCount = static_cast<uint32_t>(vertexAttributes.size());
+    vertexInput.pVertexAttributeDescriptions = vertexAttributes.data();
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkViewport viewport{};
+    viewport.width = static_cast<float>(_swapchainExtent.width);
+    viewport.height = static_cast<float>(_swapchainExtent.height);
+    viewport.maxDepth = 1.0f;
+    VkRect2D scissor{};
+    scissor.extent = _swapchainExtent;
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+    VkPipelineRasterizationStateCreateInfo rasterizer =
+        vk::BuildRasterizationState(render::CullMode::None, render::FrontFaceMode::CW);
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo depthStencil = vk::BuildDepthStencilState(render::DepthMode::Disabled);
+    VkPipelineColorBlendAttachmentState colorBlendAttachment =
+        vk::BuildColorBlendAttachmentState(render::BlendMode::AlphaBlend);
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = screenStages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.layout = _screenPipelineLayout;
+    pipelineInfo.renderPass = _compositeRenderPass;
+    const VkResult result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_overlayPipeline);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: overlay pipeline creation failed: {}", VkResultName(result));
+        return false;
+    }
+    _overlayPipelineCache.Init(_device, _compositeRenderPass, _screenPipelineLayout, _screenVertexModule,
+                               _screenFragmentModule, vertexInput, inputAssembly, viewportState, multisampling);
+    SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_overlayPipeline), "PoseidonVK Present Overlay Pipeline");
+
+    std::vector<uint32_t> vertexSpirv;
+    std::vector<uint32_t> fragmentSpirv;
+    std::string error;
+    if (!CompileBootstrapShader(kTonemapVertexShader, EShLangVertex, vertexSpirv, error) ||
+        !CompileBootstrapShader(kTonemapFragmentShader, EShLangFragment, fragmentSpirv, error))
+    {
+        LOG_ERROR(Graphics, "Vulkan: tonemap shader compile failed: {}", error);
+        return false;
+    }
+    VkShaderModuleCreateInfo moduleInfo{};
+    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    moduleInfo.codeSize = vertexSpirv.size() * sizeof(uint32_t);
+    moduleInfo.pCode = vertexSpirv.data();
+    VkShaderModule tonemapVertex = VK_NULL_HANDLE;
+    VkShaderModule tonemapFragment = VK_NULL_HANDLE;
+    if (vkCreateShaderModule(_device, &moduleInfo, nullptr, &tonemapVertex) != VK_SUCCESS)
+        return false;
+    moduleInfo.codeSize = fragmentSpirv.size() * sizeof(uint32_t);
+    moduleInfo.pCode = fragmentSpirv.data();
+    if (vkCreateShaderModule(_device, &moduleInfo, nullptr, &tonemapFragment) != VK_SUCCESS)
+    {
+        vkDestroyShaderModule(_device, tonemapVertex, nullptr);
+        return false;
+    }
+    VkPipelineShaderStageCreateInfo tonemapStages[2]{};
+    tonemapStages[0] = screenStages[0];
+    tonemapStages[0].module = tonemapVertex;
+    tonemapStages[1] = screenStages[1];
+    tonemapStages[1].module = tonemapFragment;
+    VkPipelineVertexInputStateCreateInfo noVertexInput{};
+    noVertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineColorBlendAttachmentState opaqueBlend = vk::BuildColorBlendAttachmentState(render::BlendMode::Opaque);
+    colorBlending.pAttachments = &opaqueBlend;
+    pipelineInfo.pStages = tonemapStages;
+    pipelineInfo.pVertexInputState = &noVertexInput;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    const VkResult tonemapResult =
+        vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_compositePipeline);
+    vkDestroyShaderModule(_device, tonemapFragment, nullptr);
+    vkDestroyShaderModule(_device, tonemapVertex, nullptr);
+    if (tonemapResult != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: tonemap pipeline creation failed: {}", VkResultName(tonemapResult));
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_compositePipeline), "PoseidonVK Tonemap Pipeline");
+    return true;
+}
+
 bool EngineVK::CreateSyncObjects()
 {
     VkSemaphoreCreateInfo semaphoreInfo{};
@@ -2231,7 +2503,7 @@ void EngineVK::DestroyFrameDescriptorResources()
 
 bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
 {
-    if (imageIndex >= _commandBuffers.size() || imageIndex >= _framebuffers.size())
+    if (imageIndex >= _commandBuffers.size() || imageIndex >= _framebuffers.size() || !_sceneFramebuffer)
         return false;
 
     VkCommandBuffer commandBuffer = _commandBuffers[imageIndex];
@@ -2248,7 +2520,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         return false;
     }
 
-    BeginDebugLabel(commandBuffer, "PoseidonVK Bootstrap Render Pass", 0.04f, 0.35f, 0.75f);
+    BeginDebugLabel(commandBuffer, "PoseidonVK HDR Scene Pass", 0.04f, 0.35f, 0.75f);
 
     VkClearValue clearValues[2]{};
     clearValues[0].color = _clearColor;
@@ -2258,7 +2530,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = _renderPass;
-    renderPassInfo.framebuffer = _framebuffers[imageIndex];
+    renderPassInfo.framebuffer = _sceneFramebuffer;
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = _swapchainExtent;
     renderPassInfo.clearValueCount = 2;
@@ -2296,7 +2568,8 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     {
         // Software-transformed clouds have no hardware mesh. Draw their NoZBuf
         // batches before the world so foreground geometry can overwrite them.
-        RecordScreenDraws(commandBuffer, vk::ScreenDrawPhaseVK::Background);
+        RecordScreenDraws(commandBuffer, vk::ScreenDrawPhaseVK::Background, _screenPipeline, _screenPipelineCache,
+                          false);
     }
     if (_scenePipeline)
     {
@@ -2497,8 +2770,31 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                                vk::kScenePushConstantsSize, &sceneConstants);
             vkCmdDrawIndexed(commandBuffer, kSceneQuadIndexCount, 1, 0, 0, 0);
         }
-        RecordScreenDraws(commandBuffer, vk::ScreenDrawPhaseVK::Overlay);
     }
+    vkCmdEndRenderPass(commandBuffer);
+
+    EndDebugLabel(commandBuffer);
+
+    BeginDebugLabel(commandBuffer, "PoseidonVK Present Composite Pass", 0.25f, 0.65f, 0.15f);
+    VkRenderPassBeginInfo compositePassInfo{};
+    compositePassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    compositePassInfo.renderPass = _compositeRenderPass;
+    compositePassInfo.framebuffer = _framebuffers[imageIndex];
+    compositePassInfo.renderArea.offset = {0, 0};
+    compositePassInfo.renderArea.extent = _swapchainExtent;
+    vkCmdBeginRenderPass(commandBuffer, &compositePassInfo, VK_SUBPASS_CONTENTS_INLINE);
+    if (_compositePipeline && _compositeDescriptorSet)
+    {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _compositePipeline);
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _screenPipelineLayout, 0, 1,
+                                &_compositeDescriptorSet, 0, nullptr);
+        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+    }
+    if (_overlayPipeline)
+        // The present pass has no depth attachment, so UI always renders with
+        // depth disabled after the HDR image has been tone mapped.
+        RecordScreenDraws(commandBuffer, vk::ScreenDrawPhaseVK::Overlay, _overlayPipeline, _overlayPipelineCache,
+                          true);
     vkCmdEndRenderPass(commandBuffer);
 
     EndDebugLabel(commandBuffer);
@@ -2517,6 +2813,8 @@ void EngineVK::DestroySwapchain()
     // Cached pipelines reference the render pass destroyed below. They must be
     // recreated for the new swapchain's render pass and viewport dimensions.
     _scenePipelineCache.Destroy(_device);
+    _screenPipelineCache.Destroy(_device);
+    _overlayPipelineCache.Destroy(_device);
 
     if (_scenePipeline)
     {
@@ -2533,6 +2831,24 @@ void EngineVK::DestroySwapchain()
         vkDestroyPipeline(_device, _screenPipeline, nullptr);
         _screenPipeline = VK_NULL_HANDLE;
     }
+    if (_overlayPipeline)
+    {
+        vkDestroyPipeline(_device, _overlayPipeline, nullptr);
+        _overlayPipeline = VK_NULL_HANDLE;
+    }
+    if (_compositePipeline)
+    {
+        vkDestroyPipeline(_device, _compositePipeline, nullptr);
+        _compositePipeline = VK_NULL_HANDLE;
+    }
+
+    DestroyCompositeResources();
+
+    if (_sceneFramebuffer)
+    {
+        vkDestroyFramebuffer(_device, _sceneFramebuffer, nullptr);
+        _sceneFramebuffer = VK_NULL_HANDLE;
+    }
 
     for (VkFramebuffer framebuffer : _framebuffers)
     {
@@ -2541,10 +2857,22 @@ void EngineVK::DestroySwapchain()
     }
     _framebuffers.clear();
 
+    if (_hdrSceneSampler)
+    {
+        vkDestroySampler(_device, _hdrSceneSampler, nullptr);
+        _hdrSceneSampler = VK_NULL_HANDLE;
+    }
+    vk::DestroyImage(_device, _hdrSceneImage);
+
     if (_renderPass)
     {
         vkDestroyRenderPass(_device, _renderPass, nullptr);
         _renderPass = VK_NULL_HANDLE;
+    }
+    if (_compositeRenderPass)
+    {
+        vkDestroyRenderPass(_device, _compositeRenderPass, nullptr);
+        _compositeRenderPass = VK_NULL_HANDLE;
     }
 
     for (VkImageView imageView : _swapchainImageViews)
@@ -2668,6 +2996,16 @@ void EngineVK::DestroyScreenPipelineLayout()
     }
 }
 
+void EngineVK::DestroyCompositeResources()
+{
+    _compositeDescriptorSet = VK_NULL_HANDLE;
+    if (_device && _compositeDescriptorPool)
+    {
+        vkDestroyDescriptorPool(_device, _compositeDescriptorPool, nullptr);
+        _compositeDescriptorPool = VK_NULL_HANDLE;
+    }
+}
+
 void EngineVK::DestroyScreenDescriptorResources()
 {
     if (_device)
@@ -2696,7 +3034,8 @@ bool EngineVK::RecreateSwapchain()
     vkDeviceWaitIdle(_device);
     DestroySwapchain();
     const bool recreated = CreateSwapchain() && CreateBootstrapPipeline() && CreateScenePipeline() &&
-                           CreateScreenPipeline() && CreateSyncObjects();
+                            CreateScreenPipeline() && CreateCompositeResources() && CreateOverlayPipeline() &&
+                            CreateSyncObjects();
     _swapchainDirty = !recreated;
     return recreated;
 }
@@ -3660,7 +3999,8 @@ void EngineVK::AppendScreenBatch(std::uint32_t textureId, std::uint32_t indexCou
     _screenBatches.push_back({textureId, firstIndex, indexCount, phase, descriptor});
 }
 
-void EngineVK::RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPhaseVK phase)
+void EngineVK::RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPhaseVK phase, VkPipeline fallbackPipeline,
+                                 vk::PipelineCacheVK& pipelineCache, bool forceDepthDisabled)
 {
     if (_screenVertices.empty() || _screenIndices.empty())
         return;
@@ -3689,10 +4029,13 @@ void EngineVK::RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPh
         if (batch.phase != phase || batch.indexCount == 0)
             continue;
 
-        const VkPipeline pipeline = _screenPipelineCache.Get(vk::KeyFromDescriptor(batch.descriptor));
+        vk::PipelineKeyVK pipelineKey = vk::KeyFromDescriptor(batch.descriptor);
+        if (forceDepthDisabled)
+            pipelineKey.depth = render::DepthMode::Disabled;
+        const VkPipeline pipeline = pipelineCache.Get(pipelineKey);
         if (pipeline != lastBoundPipeline)
         {
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline ? pipeline : _screenPipeline);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline ? pipeline : fallbackPipeline);
             lastBoundPipeline = pipeline;
         }
 
