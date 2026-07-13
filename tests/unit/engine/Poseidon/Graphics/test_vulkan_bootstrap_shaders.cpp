@@ -115,6 +115,27 @@ TEST_CASE("Vulkan scene shaders compile under Vulkan GLSL rules", "[vulkan][shad
     REQUIRE(fragment.spirvWordCount > 0);
 }
 
+TEST_CASE("Vulkan world-composite shaders compile under Vulkan GLSL rules", "[vulkan][shaders]")
+{
+    GlslangInit init;
+
+    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
+    const std::string vertexSource = ReadTextFile(shaderDir / "world_composite.vert.glsl");
+    const std::string fragmentSource = ReadTextFile(shaderDir / "world_composite.frag.glsl");
+    REQUIRE_FALSE(vertexSource.empty());
+    REQUIRE_FALSE(fragmentSource.empty());
+
+    const CompileOutcome vertex = CompileVulkanGLSL(vertexSource, EShLangVertex);
+    CAPTURE(vertex.info);
+    REQUIRE(vertex.success);
+    REQUIRE(vertex.spirvWordCount > 0);
+
+    const CompileOutcome fragment = CompileVulkanGLSL(fragmentSource, EShLangFragment);
+    CAPTURE(fragment.info);
+    REQUIRE(fragment.success);
+    REQUIRE(fragment.spirvWordCount > 0);
+}
+
 TEST_CASE("Vulkan bootstrap push constants match shader contract", "[vulkan][shaders]")
 {
     using Poseidon::vk::BootstrapPushConstantsVK;

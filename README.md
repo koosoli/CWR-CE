@@ -27,6 +27,23 @@ Current Vulkan 1.3 smoke-test screenshot using separate demo game data. The
 Vulkan backend is in active raster-parity work and can render the full game
 scene with known gaps (see Phase 2 below).
 
+### Experimental Vulkan Presentation
+
+The Vulkan backend has an opt-in world-composition path for local smoke tests:
+
+- Procedural clear sky with a high-radiance sun and atmospheric halo.
+- Depth-aware world-space volumetric-cloud prototype.
+- Isolated FP16 world target, ACES tone mapping, bloom, and sun-directed eye
+  exposure. Legacy briefing pages, cockpit, HUD, and other display-referred UI
+  are composed after tone mapping.
+- Exposure uses stable camera-to-sun angular metering. Foreground-object sun
+  occlusion requires a future depth-sampled visibility pass.
+
+This path remains experimental. It does not yet provide temporal eye adaptation,
+a dedicated low-resolution bloom chain, lens flare, dynamic resolution, or
+representative GPU timing data. It is therefore not expected to match the frame
+rate or renderer maturity of the reference GL33 path or related renderer forks.
+
 ## Modernization Goals
 
 The long-term goal is to turn the classic Poseidon codebase into a clear,
@@ -173,9 +190,13 @@ smoke-testable.
 
 ### Phase 4 - HDR And Presentation
 
-- [ ] Render the scene through an `R16G16B16A16_SFLOAT` HDR intermediate target.
-- [ ] Add exposure, bloom, tone mapping, presentation conversion, and an explicit
-  UI-after-tonemap composition policy.
+- [x] Add an opt-in `R16G16B16A16_SFLOAT` world target with an isolated
+  world/cloud composition pass.
+- [/] Add opt-in exposure, bloom, ACES tone mapping, presentation conversion,
+  and an explicit UI-after-tonemap composition policy. Current exposure uses
+  smooth camera-to-sun metering plus an HDR-core visibility heuristic; temporal
+  adaptation, exact depth occlusion, lens flare, and a low-resolution bloom
+  chain remain outstanding.
 - [ ] Add night-vision post-processing.
 - [ ] Define internal-resolution, dynamic-resolution, and upscaling policy.
 - [ ] Add AMD FidelityFX Super Resolution (FSR) only after the HDR pass chain and
@@ -184,16 +205,19 @@ smoke-testable.
 ### Phase 5 - Modern Visual Base
 
 - [ ] Improve cascaded-shadow split distribution, transition blending, filtering, and bias.
-- [ ] Implement procedural clear sky, sun, Rayleigh/Mie atmosphere, aerial perspective,
-  environment lighting, and a conventional instanced/billboard star fallback.
+- [/] Implement a procedural clear sky, high-radiance sun, and atmospheric halo
+  for the opt-in Vulkan path. Rayleigh/Mie atmosphere, aerial perspective,
+  environment lighting, moon/stars, and a conventional instanced/billboard star
+  fallback remain outstanding.
 - [ ] Add an MSAA-ready depth-and-normal prepass with matching alpha-cutout behavior.
 - [ ] Add Hi-Z, SSAO/GTAO, and other sampleable-depth/normal consumers.
 - [ ] Add Gerstner-wave water, soft shore/coast treatment, refraction, and sky/environment
   reflection in dependency order.
 - [ ] Add Forward+ clustered lighting after HDR; do not block water on the full lighting
   implementation.
-- [ ] Add clouds after the sky interface is stable, then rain after particle/weather
-  infrastructure exists.
+- [/] Add opt-in depth-aware world-space volumetric-cloud prototyping after the
+  sky interface is stable. Temporal accumulation, terrain/cloud shadows,
+  weather controls, rain, and particle/weather infrastructure remain outstanding.
 
 ### Phase 6 - GPU Scale And Optional Tiers
 
@@ -333,6 +357,12 @@ PoseidonGameDemo.exe --render vulkan --window
 
 The `--render` flag selects the backend (`auto`, `gl33`, or `vulkan`).
 The `--window` flag starts in windowed mode.
+
+Enable the experimental sky, cloud, and HDR composition path with:
+
+```powershell
+$env:POSEIDON_VK_PROCEDURAL_SKY='1'; $env:POSEIDON_VK_VOLUMETRIC_CLOUDS='1'; $env:POSEIDON_VK_HDR='1'; .\PoseidonGameDemo.exe --render vulkan --window
+```
 
 ### Smoke Testing
 
