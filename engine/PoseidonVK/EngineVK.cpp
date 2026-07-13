@@ -107,6 +107,18 @@ constexpr const char kProceduralSkyVertexShader[] =
 constexpr const char kProceduralSkyFragmentShader[] =
 #include <PoseidonVK/Shaders/procedural_sky.frag.glsl.hpp>
     ;
+constexpr const char kVolumetricCloudVertexShader[] =
+#include <PoseidonVK/Shaders/volumetric_clouds.vert.glsl.hpp>
+    ;
+constexpr const char kVolumetricCloudFragmentShader[] =
+#include <PoseidonVK/Shaders/volumetric_clouds.frag.glsl.hpp>
+    ;
+constexpr const char kWorldCompositeVertexShader[] =
+#include <PoseidonVK/Shaders/world_composite.vert.glsl.hpp>
+    ;
+constexpr const char kWorldCompositeFragmentShader[] =
+#include <PoseidonVK/Shaders/world_composite.frag.glsl.hpp>
+    ;
 constexpr const char kScreenVertexShader[] =
 #include <PoseidonVK/Shaders/screen.vert.glsl.hpp>
     ;
@@ -397,6 +409,8 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
     _bitsPerPixel = bitsPerPixel > 0 ? bitsPerPixel : 32;
     if (const char* value = std::getenv("POSEIDON_VK_PROCEDURAL_SKY"))
         _proceduralSkyEnabled = std::strcmp(value, "0") != 0;
+    if (const char* value = std::getenv("POSEIDON_VK_VOLUMETRIC_CLOUDS"))
+        _volumetricCloudsEnabled = std::strcmp(value, "0") != 0;
 
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
@@ -463,12 +477,20 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
 
     if (!CreateInstance() || !CreateDebugMessenger() || !CreateSurface() || !PickPhysicalDevice() || !CreateDevice() ||
         !CreateFrameConstantsBuffer() || !CreateBootstrapVertexBuffer() || !CreateBootstrapIndexBuffer() ||
-        !CreateSceneVertexBuffer() || !CreateSceneIndexBuffer() || !EnsureDrawConstantsBufferCapacity(1) ||
-        !CreateFrameDescriptorLayout() || !CreateTextureDescriptorLayout() || !CreatePipelineLayout() ||
-        !CreateTextureDescriptorPool() || !CreateScenePipelineLayout() || !CreateFrameDescriptorSet() ||
-        !CreateCommandPool() || !CreateSwapchain() || !CreateBootstrapPipeline() || !CreateScenePipeline() ||
-        !CreateProceduralSkyPipeline() ||
-        !CreateScreenDescriptorLayout() || !CreateScreenPipelineLayout() || !CreateScreenPipeline() ||
+         !CreateSceneVertexBuffer() || !CreateSceneIndexBuffer() || !EnsureDrawConstantsBufferCapacity(1) ||
+         !CreateFrameDescriptorLayout() || !CreateTextureDescriptorLayout() ||
+         (_volumetricCloudsEnabled &&
+          (!CreateVolumetricCloudDescriptorLayout() || !CreateWorldCompositeDescriptorLayout())) || !CreatePipelineLayout() ||
+         !CreateTextureDescriptorPool() || !CreateScenePipelineLayout() || !CreateFrameDescriptorSet() ||
+         (_volumetricCloudsEnabled &&
+          (!CreateVolumetricCloudPipelineLayout() || !CreateWorldCompositePipelineLayout())) || !CreateCommandPool() ||
+         !CreateSwapchain() ||
+         (_volumetricCloudsEnabled &&
+          (!CreateVolumetricCloudDescriptorSet() || !CreateWorldCompositeDescriptorSet())) ||
+         !CreateBootstrapPipeline() || !CreateScenePipeline() || !CreateProceduralSkyPipeline() ||
+         (_volumetricCloudsEnabled && !CreateVolumetricCloudPipeline()) ||
+         (_volumetricCloudsEnabled && !CreateWorldCompositePipeline()) ||
+         !CreateScreenDescriptorLayout() || !CreateScreenPipelineLayout() || !CreateScreenPipeline() ||
         !CreateSyncObjects())
     {
         Shutdown();
@@ -501,6 +523,8 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
                        "from the GL33 renderer.");
     if (_proceduralSkyEnabled)
         LOG_INFO(Graphics, "Vulkan: experimental procedural sky is enabled");
+    if (_volumetricCloudsEnabled)
+        LOG_INFO(Graphics, "Vulkan: experimental depth-aware volumetric clouds are enabled");
 
     _textBank = new TextBankVK(*this);
 
@@ -1287,16 +1311,6 @@ bool EngineVK::CreateSwapchain()
     _swapchainFormat = surfaceFormat.format;
     _swapchainExtent = extent;
 
-    VkAttachmentDescription attachments[2]{};
-    attachments[0].format = _swapchainFormat;
-    attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[0].finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-
     const VkFormat depthFormat = FindDepthFormat();
     if (depthFormat == VK_FORMAT_UNDEFINED)
     {
@@ -1304,54 +1318,148 @@ bool EngineVK::CreateSwapchain()
         return false;
     }
     _depthFormat = depthFormat;
-    attachments[1].format = depthFormat;
-    attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference colorAttachmentRef{};
-    colorAttachmentRef.attachment = 0;
-    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference depthAttachmentRef{};
-    depthAttachmentRef.attachment = 1;
-    depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorAttachmentRef;
-    subpass.pDepthStencilAttachment = &depthAttachmentRef;
-
-    VkSubpassDependency dependency{};
-    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
-    dependency.dstSubpass = 0;
-    dependency.srcStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstStageMask =
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-
-    VkRenderPassCreateInfo renderPassInfo{};
-    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 2;
-    renderPassInfo.pAttachments = attachments;
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-    renderPassInfo.dependencyCount = 1;
-    renderPassInfo.pDependencies = &dependency;
-
-    result = vkCreateRenderPass(_device, &renderPassInfo, nullptr, &_renderPass);
-    if (result != VK_SUCCESS)
+    auto makeAttachment = [](VkFormat format, VkImageLayout finalLayout)
     {
-        LOG_ERROR(Graphics, "Vulkan: vkCreateRenderPass failed: {}", VkResultName(result));
-        return false;
+        VkAttachmentDescription attachment{};
+        attachment.format = format;
+        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachment.finalLayout = finalLayout;
+        return attachment;
+    };
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthWriteRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depthReadRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+
+    if (_volumetricCloudsEnabled)
+    {
+        // The isolated UNORM world target owns all cloud-visible world depth.
+        VkAttachmentDescription worldAttachments[] = {
+            makeAttachment(VK_FORMAT_B8G8R8A8_UNORM, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+            makeAttachment(depthFormat, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL)};
+        VkSubpassDescription worldSubpasses[3]{};
+        worldSubpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        worldSubpasses[0].colorAttachmentCount = 1;
+        worldSubpasses[0].pColorAttachments = &colorRef;
+        worldSubpasses[0].pDepthStencilAttachment = &depthWriteRef;
+        worldSubpasses[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        worldSubpasses[1].inputAttachmentCount = 1;
+        worldSubpasses[1].pInputAttachments = &depthReadRef;
+        worldSubpasses[1].colorAttachmentCount = 1;
+        worldSubpasses[1].pColorAttachments = &colorRef;
+        worldSubpasses[2].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        worldSubpasses[2].colorAttachmentCount = 1;
+        worldSubpasses[2].pColorAttachments = &colorRef;
+        worldSubpasses[2].pDepthStencilAttachment = &depthReadRef;
+
+        VkSubpassDependency worldDependencies[4]{};
+        worldDependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        worldDependencies[0].dstSubpass = 0;
+        worldDependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        worldDependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        worldDependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        worldDependencies[1].srcSubpass = 0;
+        worldDependencies[1].dstSubpass = 1;
+        worldDependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        worldDependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        worldDependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        worldDependencies[1].dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT |
+                                              VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        worldDependencies[2].srcSubpass = 1;
+        worldDependencies[2].dstSubpass = 2;
+        worldDependencies[2].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        worldDependencies[2].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        worldDependencies[2].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        worldDependencies[2].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                              VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        worldDependencies[3].srcSubpass = 2;
+        worldDependencies[3].dstSubpass = VK_SUBPASS_EXTERNAL;
+        worldDependencies[3].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        worldDependencies[3].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        worldDependencies[3].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        worldDependencies[3].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        VkRenderPassCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        info.attachmentCount = 2;
+        info.pAttachments = worldAttachments;
+        info.subpassCount = 3;
+        info.pSubpasses = worldSubpasses;
+        info.dependencyCount = 4;
+        info.pDependencies = worldDependencies;
+        result = vkCreateRenderPass(_device, &info, nullptr, &_renderPass);
+        if (result != VK_SUCCESS)
+            return false;
+        SetObjectName(VK_OBJECT_TYPE_RENDER_PASS, VulkanObjectHandle(_renderPass), "PoseidonVK World Render Pass");
+
+        VkAttachmentDescription presentAttachments[] = {
+            makeAttachment(_swapchainFormat, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR),
+            makeAttachment(depthFormat, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)};
+        VkSubpassDescription presentSubpass{};
+        presentSubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        presentSubpass.colorAttachmentCount = 1;
+        presentSubpass.pColorAttachments = &colorRef;
+        presentSubpass.pDepthStencilAttachment = &depthWriteRef;
+        VkSubpassDependency presentDependency{};
+        presentDependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        presentDependency.dstSubpass = 0;
+        presentDependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                         VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+        presentDependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        presentDependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        info.attachmentCount = 2;
+        info.pAttachments = presentAttachments;
+        info.subpassCount = 1;
+        info.pSubpasses = &presentSubpass;
+        info.dependencyCount = 1;
+        info.pDependencies = &presentDependency;
+        result = vkCreateRenderPass(_device, &info, nullptr, &_presentRenderPass);
+        if (result != VK_SUCCESS)
+            return false;
+        SetObjectName(VK_OBJECT_TYPE_RENDER_PASS, VulkanObjectHandle(_presentRenderPass), "PoseidonVK Present Render Pass");
     }
-    SetObjectName(VK_OBJECT_TYPE_RENDER_PASS, VulkanObjectHandle(_renderPass), "PoseidonVK Bootstrap Render Pass");
+    else
+    {
+        VkAttachmentDescription attachments[] = {
+            makeAttachment(_swapchainFormat, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR),
+            makeAttachment(depthFormat, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+        subpass.pDepthStencilAttachment = &depthWriteRef;
+        VkSubpassDependency dependency{};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+        dependency.dstStageMask = dependency.srcStageMask;
+        dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        VkRenderPassCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        info.attachmentCount = 2;
+        info.pAttachments = attachments;
+        info.subpassCount = 1;
+        info.pSubpasses = &subpass;
+        info.dependencyCount = 1;
+        info.pDependencies = &dependency;
+        result = vkCreateRenderPass(_device, &info, nullptr, &_renderPass);
+        if (result != VK_SUCCESS)
+            return false;
+        SetObjectName(VK_OBJECT_TYPE_RENDER_PASS, VulkanObjectHandle(_renderPass), "PoseidonVK Direct Render Pass");
+    }
 
     uint32_t actualImageCount = 0;
     vkGetSwapchainImagesKHR(_device, _swapchain, &actualImageCount, nullptr);
@@ -1391,6 +1499,8 @@ bool EngineVK::CreateSwapchain()
 
     if (!CreateDepthResources())
         return false;
+    if (_volumetricCloudsEnabled && !CreateWorldTarget())
+        return false;
 
     _framebuffers.resize(actualImageCount, VK_NULL_HANDLE);
     for (uint32_t i = 0; i < actualImageCount; ++i)
@@ -1399,7 +1509,7 @@ bool EngineVK::CreateSwapchain()
 
         VkFramebufferCreateInfo framebufferInfo{};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-        framebufferInfo.renderPass = _renderPass;
+        framebufferInfo.renderPass = _volumetricCloudsEnabled ? _presentRenderPass : _renderPass;
         framebufferInfo.attachmentCount = 2;
         framebufferInfo.pAttachments = attachments;
         framebufferInfo.width = _swapchainExtent.width;
@@ -1572,6 +1682,105 @@ void EngineVK::DestroyDepthResources()
     _depthFormat = VK_FORMAT_UNDEFINED;
 }
 
+bool EngineVK::CreateWorldTarget()
+{
+    auto createImage = [&](VkFormat format, VkImageUsageFlags usage, VkImageAspectFlags aspect, VkImage& image,
+                           VkDeviceMemory& memory, VkImageView& view, const char* name)
+    {
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = format;
+        imageInfo.extent = {_swapchainExtent.width, _swapchainExtent.height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.usage = usage;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        if (vkCreateImage(_device, &imageInfo, nullptr, &image) != VK_SUCCESS)
+            return false;
+        VkMemoryRequirements requirements{};
+        vkGetImageMemoryRequirements(_device, image, &requirements);
+        const uint32_t memoryType =
+            vk::FindMemoryType(_physicalDevice, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (memoryType == vk::kInvalidMemoryType)
+            return false;
+        VkMemoryAllocateInfo allocation{};
+        allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        allocation.allocationSize = requirements.size;
+        allocation.memoryTypeIndex = memoryType;
+        if (vkAllocateMemory(_device, &allocation, nullptr, &memory) != VK_SUCCESS ||
+            vkBindImageMemory(_device, image, memory, 0) != VK_SUCCESS)
+            return false;
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = format;
+        viewInfo.subresourceRange.aspectMask = aspect;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        if (vkCreateImageView(_device, &viewInfo, nullptr, &view) != VK_SUCCESS)
+            return false;
+        SetObjectName(VK_OBJECT_TYPE_IMAGE, VulkanObjectHandle(image), name);
+        return true;
+    };
+
+    if (!createImage(VK_FORMAT_B8G8R8A8_UNORM,
+                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                     VK_IMAGE_ASPECT_COLOR_BIT, _worldColorImage, _worldColorImageMemory, _worldColorImageView,
+                     "PoseidonVK World UNORM Color") ||
+        !createImage(_depthFormat,
+                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+                     VK_IMAGE_ASPECT_DEPTH_BIT, _worldDepthImage, _worldDepthImageMemory, _worldDepthImageView,
+                     "PoseidonVK World Depth"))
+    {
+        DestroyWorldTarget();
+        return false;
+    }
+
+    VkImageView attachments[] = {_worldColorImageView, _worldDepthImageView};
+    VkFramebufferCreateInfo framebufferInfo{};
+    framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    framebufferInfo.renderPass = _renderPass;
+    framebufferInfo.attachmentCount = 2;
+    framebufferInfo.pAttachments = attachments;
+    framebufferInfo.width = _swapchainExtent.width;
+    framebufferInfo.height = _swapchainExtent.height;
+    framebufferInfo.layers = 1;
+    if (vkCreateFramebuffer(_device, &framebufferInfo, nullptr, &_worldFramebuffer) != VK_SUCCESS)
+    {
+        DestroyWorldTarget();
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_FRAMEBUFFER, VulkanObjectHandle(_worldFramebuffer), "PoseidonVK World Framebuffer");
+    return true;
+}
+
+void EngineVK::DestroyWorldTarget()
+{
+    if (_worldFramebuffer)
+    {
+        vkDestroyFramebuffer(_device, _worldFramebuffer, nullptr);
+        _worldFramebuffer = VK_NULL_HANDLE;
+    }
+    auto destroyImage = [&](VkImageView& view, VkImage& image, VkDeviceMemory& memory)
+    {
+        if (view)
+            vkDestroyImageView(_device, view, nullptr);
+        if (image)
+            vkDestroyImage(_device, image, nullptr);
+        if (memory)
+            vkFreeMemory(_device, memory, nullptr);
+        view = VK_NULL_HANDLE;
+        image = VK_NULL_HANDLE;
+        memory = VK_NULL_HANDLE;
+    };
+    destroyImage(_worldColorImageView, _worldColorImage, _worldColorImageMemory);
+    destroyImage(_worldDepthImageView, _worldDepthImage, _worldDepthImageMemory);
+}
+
 bool EngineVK::CreateBootstrapPipeline()
 {
     if (_device && _bootstrapPipeline)
@@ -1730,10 +1939,23 @@ bool EngineVK::CreateScenePipeline()
 {
     if (_device)
     {
+        _scenePipelineCache.Destroy(_device);
+        _cockpitScenePipelineCache.Destroy(_device);
+        _worldLateScenePipelineCache.Destroy(_device);
         if (_scenePipeline)
         {
             vkDestroyPipeline(_device, _scenePipeline, nullptr);
             _scenePipeline = VK_NULL_HANDLE;
+        }
+        if (_cockpitScenePipeline)
+        {
+            vkDestroyPipeline(_device, _cockpitScenePipeline, nullptr);
+            _cockpitScenePipeline = VK_NULL_HANDLE;
+        }
+        if (_worldLateScenePipeline)
+        {
+            vkDestroyPipeline(_device, _worldLateScenePipeline, nullptr);
+            _worldLateScenePipeline = VK_NULL_HANDLE;
         }
         if (_sceneVertexModule)
         {
@@ -1870,8 +2092,25 @@ bool EngineVK::CreateScenePipeline()
     pipelineInfo.renderPass = _renderPass;
     pipelineInfo.subpass = 0;
 
-    const VkResult result =
+    VkResult result =
         vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_scenePipeline);
+
+    if (result == VK_SUCCESS && _volumetricCloudsEnabled)
+    {
+        VkPipelineDepthStencilStateCreateInfo worldLateDepthStencil =
+            vk::BuildDepthStencilState(render::DepthMode::ReadOnly);
+        pipelineInfo.pDepthStencilState = &worldLateDepthStencil;
+        pipelineInfo.subpass = 2;
+        result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_worldLateScenePipeline);
+        if (result == VK_SUCCESS)
+        {
+            pipelineInfo.pDepthStencilState = &depthStencil;
+            pipelineInfo.renderPass = _presentRenderPass;
+            pipelineInfo.subpass = 0;
+            result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                               &_cockpitScenePipeline);
+        }
+    }
 
     // Keep the shader modules alive so the pipeline cache can create variants.
     // They will be destroyed in DestroyScenePipelineLayout.
@@ -1885,10 +2124,25 @@ bool EngineVK::CreateScenePipeline()
     }
 
     SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_scenePipeline), "PoseidonVK Scene Quad Pipeline");
+    if (_cockpitScenePipeline)
+        SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_cockpitScenePipeline),
+                      "PoseidonVK Cockpit Scene Pipeline");
+    if (_worldLateScenePipeline)
+        SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_worldLateScenePipeline),
+                      "PoseidonVK World Late Scene Pipeline");
 
     // Initialise the pipeline cache with the fixed state shared across all variants.
     _scenePipelineCache.Init(_device, _renderPass, _scenePipelineLayout, _sceneVertexModule, _sceneFragmentModule,
                               vertexInput, inputAssembly, viewportState, multisampling);
+    if (_volumetricCloudsEnabled)
+    {
+        _worldLateScenePipelineCache.Init(_device, _renderPass, _scenePipelineLayout, _sceneVertexModule,
+                                          _sceneFragmentModule, vertexInput, inputAssembly, viewportState,
+                                          multisampling, 2);
+        _cockpitScenePipelineCache.Init(_device, _presentRenderPass, _scenePipelineLayout, _sceneVertexModule,
+                                         _sceneFragmentModule, vertexInput, inputAssembly, viewportState,
+                                         multisampling);
+    }
 
     LOG_INFO(Graphics, "Vulkan: scene pipeline created");
     return true;
@@ -2008,6 +2262,385 @@ bool EngineVK::CreateProceduralSkyPipeline()
     return true;
 }
 
+bool EngineVK::CreateVolumetricCloudDescriptorLayout()
+{
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    createInfo.bindingCount = 1;
+    createInfo.pBindings = &binding;
+    const VkResult result = vkCreateDescriptorSetLayout(_device, &createInfo, nullptr,
+                                                        &_volumetricCloudDescriptorSetLayout);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: cloud depth descriptor layout creation failed: {}", VkResultName(result));
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, VulkanObjectHandle(_volumetricCloudDescriptorSetLayout),
+                  "PoseidonVK Volumetric Cloud Depth Descriptor Layout");
+    return true;
+}
+
+bool EngineVK::CreateVolumetricCloudPipelineLayout()
+{
+    VkDescriptorSetLayout setLayouts[] = {_frameDescriptorSetLayout, _volumetricCloudDescriptorSetLayout};
+    VkPipelineLayoutCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    createInfo.setLayoutCount = 2;
+    createInfo.pSetLayouts = setLayouts;
+    const VkResult result = vkCreatePipelineLayout(_device, &createInfo, nullptr, &_volumetricCloudPipelineLayout);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: volumetric cloud pipeline layout creation failed: {}", VkResultName(result));
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_PIPELINE_LAYOUT, VulkanObjectHandle(_volumetricCloudPipelineLayout),
+                  "PoseidonVK Volumetric Cloud Pipeline Layout");
+    return true;
+}
+
+bool EngineVK::CreateVolumetricCloudDescriptorSet()
+{
+    DestroyVolumetricCloudDescriptorResources();
+    if (!_worldDepthImageView || !_volumetricCloudDescriptorSetLayout)
+        return false;
+
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    poolSize.descriptorCount = 1;
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    VkResult result = vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_volumetricCloudDescriptorPool);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: cloud depth descriptor pool creation failed: {}", VkResultName(result));
+        return false;
+    }
+
+    VkDescriptorSetAllocateInfo allocateInfo{};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocateInfo.descriptorPool = _volumetricCloudDescriptorPool;
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &_volumetricCloudDescriptorSetLayout;
+    result = vkAllocateDescriptorSets(_device, &allocateInfo, &_volumetricCloudDescriptorSet);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: cloud depth descriptor set allocation failed: {}", VkResultName(result));
+        DestroyVolumetricCloudDescriptorResources();
+        return false;
+    }
+
+    VkDescriptorImageInfo depthImageInfo{};
+    depthImageInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    depthImageInfo.imageView = _worldDepthImageView;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = _volumetricCloudDescriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    write.pImageInfo = &depthImageInfo;
+    vkUpdateDescriptorSets(_device, 1, &write, 0, nullptr);
+    SetObjectName(VK_OBJECT_TYPE_DESCRIPTOR_POOL, VulkanObjectHandle(_volumetricCloudDescriptorPool),
+                  "PoseidonVK Volumetric Cloud Descriptor Pool");
+    SetObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET, VulkanObjectHandle(_volumetricCloudDescriptorSet),
+                  "PoseidonVK Volumetric Cloud Depth Descriptor Set");
+    return true;
+}
+
+bool EngineVK::CreateVolumetricCloudPipeline()
+{
+    if (_volumetricCloudPipeline)
+    {
+        vkDestroyPipeline(_device, _volumetricCloudPipeline, nullptr);
+        _volumetricCloudPipeline = VK_NULL_HANDLE;
+    }
+
+    std::vector<uint32_t> vertexSpirv;
+    std::vector<uint32_t> fragmentSpirv;
+    std::string error;
+    if (!CompileBootstrapShader(kVolumetricCloudVertexShader, EShLangVertex, vertexSpirv, error) ||
+        !CompileBootstrapShader(kVolumetricCloudFragmentShader, EShLangFragment, fragmentSpirv, error))
+    {
+        LOG_ERROR(Graphics, "Vulkan: volumetric cloud shader compile failed: {}", error);
+        return false;
+    }
+
+    auto createShaderModule = [&](const std::vector<uint32_t>& spirv, VkShaderModule& module)
+    {
+        VkShaderModuleCreateInfo createInfo{};
+        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createInfo.codeSize = spirv.size() * sizeof(uint32_t);
+        createInfo.pCode = spirv.data();
+        return vkCreateShaderModule(_device, &createInfo, nullptr, &module) == VK_SUCCESS;
+    };
+    VkShaderModule vertexModule = VK_NULL_HANDLE;
+    VkShaderModule fragmentModule = VK_NULL_HANDLE;
+    if (!createShaderModule(vertexSpirv, vertexModule) || !createShaderModule(fragmentSpirv, fragmentModule))
+    {
+        if (vertexModule)
+            vkDestroyShaderModule(_device, vertexModule, nullptr);
+        if (fragmentModule)
+            vkDestroyShaderModule(_device, fragmentModule, nullptr);
+        LOG_ERROR(Graphics, "Vulkan: volumetric cloud shader module creation failed");
+        return false;
+    }
+
+    VkPipelineShaderStageCreateInfo shaderStages[2]{};
+    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    shaderStages[0].module = vertexModule;
+    shaderStages[0].pName = "main";
+    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    shaderStages[1].module = fragmentModule;
+    shaderStages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{};
+    vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkViewport viewport{};
+    viewport.y = static_cast<float>(_swapchainExtent.height);
+    viewport.width = static_cast<float>(_swapchainExtent.width);
+    viewport.height = -static_cast<float>(_swapchainExtent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    VkRect2D scissor{};
+    scissor.extent = _swapchainExtent;
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+    VkPipelineRasterizationStateCreateInfo rasterizer =
+        vk::BuildRasterizationState(render::CullMode::None, render::FrontFaceMode::CW);
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo depthStencil = vk::BuildDepthStencilState(render::DepthMode::Disabled);
+    VkPipelineColorBlendAttachmentState colorBlendAttachment =
+        vk::BuildColorBlendAttachmentState(render::BlendMode::AlphaBlend);
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.layout = _volumetricCloudPipelineLayout;
+    pipelineInfo.renderPass = _renderPass;
+    pipelineInfo.subpass = 1;
+    const VkResult result =
+        vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_volumetricCloudPipeline);
+    vkDestroyShaderModule(_device, fragmentModule, nullptr);
+    vkDestroyShaderModule(_device, vertexModule, nullptr);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: volumetric cloud pipeline creation failed: {}", VkResultName(result));
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_volumetricCloudPipeline),
+                  "PoseidonVK Volumetric Cloud Pipeline");
+    LOG_INFO(Graphics, "Vulkan: volumetric cloud pipeline created");
+    return true;
+}
+
+void EngineVK::DestroyVolumetricCloudDescriptorResources()
+{
+    _volumetricCloudDescriptorSet = VK_NULL_HANDLE;
+    if (_device && _volumetricCloudDescriptorPool)
+    {
+        vkDestroyDescriptorPool(_device, _volumetricCloudDescriptorPool, nullptr);
+        _volumetricCloudDescriptorPool = VK_NULL_HANDLE;
+    }
+}
+
+void EngineVK::DestroyVolumetricCloudPipelineLayout()
+{
+    if (_device && _volumetricCloudPipelineLayout)
+    {
+        vkDestroyPipelineLayout(_device, _volumetricCloudPipelineLayout, nullptr);
+        _volumetricCloudPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (_device && _volumetricCloudDescriptorSetLayout)
+    {
+        vkDestroyDescriptorSetLayout(_device, _volumetricCloudDescriptorSetLayout, nullptr);
+        _volumetricCloudDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+}
+
+bool EngineVK::CreateWorldCompositeDescriptorLayout()
+{
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayoutCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    info.bindingCount = 1;
+    info.pBindings = &binding;
+    return vkCreateDescriptorSetLayout(_device, &info, nullptr, &_worldCompositeDescriptorSetLayout) == VK_SUCCESS;
+}
+
+bool EngineVK::CreateWorldCompositePipelineLayout()
+{
+    VkPipelineLayoutCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    info.setLayoutCount = 1;
+    info.pSetLayouts = &_worldCompositeDescriptorSetLayout;
+    return vkCreatePipelineLayout(_device, &info, nullptr, &_worldCompositePipelineLayout) == VK_SUCCESS;
+}
+
+bool EngineVK::CreateWorldCompositeDescriptorSet()
+{
+    DestroyWorldCompositeDescriptorResources();
+    if (!_worldColorImageView || !_worldCompositeDescriptorSetLayout)
+        return false;
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.maxLod = 0.0f;
+    if (vkCreateSampler(_device, &samplerInfo, nullptr, &_worldCompositeSampler) != VK_SUCCESS)
+        return false;
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_worldCompositeDescriptorPool) != VK_SUCCESS)
+        return false;
+    VkDescriptorSetAllocateInfo allocation{};
+    allocation.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocation.descriptorPool = _worldCompositeDescriptorPool;
+    allocation.descriptorSetCount = 1;
+    allocation.pSetLayouts = &_worldCompositeDescriptorSetLayout;
+    if (vkAllocateDescriptorSets(_device, &allocation, &_worldCompositeDescriptorSet) != VK_SUCCESS)
+        return false;
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = _worldCompositeSampler;
+    imageInfo.imageView = _worldColorImageView;
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = _worldCompositeDescriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(_device, 1, &write, 0, nullptr);
+    return true;
+}
+
+void EngineVK::DestroyWorldCompositeDescriptorResources()
+{
+    _worldCompositeDescriptorSet = VK_NULL_HANDLE;
+    if (_worldCompositeDescriptorPool)
+        vkDestroyDescriptorPool(_device, _worldCompositeDescriptorPool, nullptr);
+    if (_worldCompositeSampler)
+        vkDestroySampler(_device, _worldCompositeSampler, nullptr);
+    _worldCompositeDescriptorPool = VK_NULL_HANDLE;
+    _worldCompositeSampler = VK_NULL_HANDLE;
+}
+
+void EngineVK::DestroyWorldCompositePipelineLayout()
+{
+    if (_worldCompositePipelineLayout)
+        vkDestroyPipelineLayout(_device, _worldCompositePipelineLayout, nullptr);
+    if (_worldCompositeDescriptorSetLayout)
+        vkDestroyDescriptorSetLayout(_device, _worldCompositeDescriptorSetLayout, nullptr);
+    _worldCompositePipelineLayout = VK_NULL_HANDLE;
+    _worldCompositeDescriptorSetLayout = VK_NULL_HANDLE;
+}
+
+bool EngineVK::CreateWorldCompositePipeline()
+{
+    if (_worldCompositePipeline)
+        vkDestroyPipeline(_device, _worldCompositePipeline, nullptr);
+    _worldCompositePipeline = VK_NULL_HANDLE;
+    std::vector<uint32_t> vertexSpirv;
+    std::vector<uint32_t> fragmentSpirv;
+    std::string error;
+    if (!CompileBootstrapShader(kWorldCompositeVertexShader, EShLangVertex, vertexSpirv, error) ||
+        !CompileBootstrapShader(kWorldCompositeFragmentShader, EShLangFragment, fragmentSpirv, error))
+        return false;
+    auto createModule = [&](const std::vector<uint32_t>& spirv, VkShaderModule& module)
+    {
+        VkShaderModuleCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        info.codeSize = spirv.size() * sizeof(uint32_t);
+        info.pCode = spirv.data();
+        return vkCreateShaderModule(_device, &info, nullptr, &module) == VK_SUCCESS;
+    };
+    VkShaderModule vertexModule = VK_NULL_HANDLE;
+    VkShaderModule fragmentModule = VK_NULL_HANDLE;
+    if (!createModule(vertexSpirv, vertexModule) || !createModule(fragmentSpirv, fragmentModule))
+        return false;
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertexModule, "main"};
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragmentModule, "main"};
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkViewport viewport{0.0f, 0.0f, static_cast<float>(_swapchainExtent.width), static_cast<float>(_swapchainExtent.height), 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, _swapchainExtent};
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+    VkPipelineRasterizationStateCreateInfo rasterizer =
+        vk::BuildRasterizationState(render::CullMode::None, render::FrontFaceMode::CW);
+    VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo depth = vk::BuildDepthStencilState(render::DepthMode::Disabled);
+    VkPipelineColorBlendAttachmentState blend = vk::BuildColorBlendAttachmentState(render::BlendMode::Opaque);
+    VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blending.attachmentCount = 1;
+    blending.pAttachments = &blend;
+    VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vertexInput;
+    info.pInputAssemblyState = &assembly;
+    info.pViewportState = &viewportState;
+    info.pRasterizationState = &rasterizer;
+    info.pMultisampleState = &multisampling;
+    info.pDepthStencilState = &depth;
+    info.pColorBlendState = &blending;
+    info.layout = _worldCompositePipelineLayout;
+    info.renderPass = _presentRenderPass;
+    const VkResult result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &info, nullptr, &_worldCompositePipeline);
+    vkDestroyShaderModule(_device, fragmentModule, nullptr);
+    vkDestroyShaderModule(_device, vertexModule, nullptr);
+    return result == VK_SUCCESS;
+}
+
 bool EngineVK::CreateScreenDescriptorLayout()
 {
     VkDescriptorSetLayoutBinding binding{};
@@ -2037,7 +2670,7 @@ bool EngineVK::CreateScreenPipelineLayout()
     VkDescriptorSetLayout setLayouts[] = {_screenDescriptorSetLayout};
 
     VkPushConstantRange pushConstants{};
-    pushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstants.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstants.offset = 0;
     pushConstants.size = vk::kScreenPushConstantsSize;
 
@@ -2064,10 +2697,16 @@ bool EngineVK::CreateScreenPipeline()
     if (_device)
     {
         _screenPipelineCache.Destroy(_device);
+        _screenOverlayPipelineCache.Destroy(_device);
         if (_screenPipeline)
         {
             vkDestroyPipeline(_device, _screenPipeline, nullptr);
             _screenPipeline = VK_NULL_HANDLE;
+        }
+        if (_screenOverlayPipeline)
+        {
+            vkDestroyPipeline(_device, _screenOverlayPipeline, nullptr);
+            _screenOverlayPipeline = VK_NULL_HANDLE;
         }
         if (_screenVertexModule)
         {
@@ -2198,8 +2837,14 @@ bool EngineVK::CreateScreenPipeline()
     pipelineInfo.renderPass = _renderPass;
     pipelineInfo.subpass = 0;
 
-    const VkResult result =
+    VkResult result =
         vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_screenPipeline);
+    if (result == VK_SUCCESS && _volumetricCloudsEnabled)
+    {
+        pipelineInfo.renderPass = _presentRenderPass;
+        pipelineInfo.subpass = 0;
+        result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_screenOverlayPipeline);
+    }
 
     _screenVertexModule = vertexModule;
     _screenFragmentModule = fragmentModule;
@@ -2210,9 +2855,14 @@ bool EngineVK::CreateScreenPipeline()
         return false;
     }
 
-    SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_screenPipeline), "PoseidonVK Screen Pipeline");
+    SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_screenPipeline), "PoseidonVK Screen Background Pipeline");
+    if (_screenOverlayPipeline)
+        SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_screenOverlayPipeline), "PoseidonVK Screen Overlay Pipeline");
     _screenPipelineCache.Init(_device, _renderPass, _screenPipelineLayout, _screenVertexModule, _screenFragmentModule,
-                              vertexInput, inputAssembly, viewportState, multisampling);
+                               vertexInput, inputAssembly, viewportState, multisampling);
+    if (_volumetricCloudsEnabled)
+        _screenOverlayPipelineCache.Init(_device, _presentRenderPass, _screenPipelineLayout, _screenVertexModule,
+                                          _screenFragmentModule, vertexInput, inputAssembly, viewportState, multisampling);
     LOG_INFO(Graphics, "Vulkan: screen pipeline created");
     return true;
 }
@@ -2379,7 +3029,9 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         return false;
     }
 
-    BeginDebugLabel(commandBuffer, "PoseidonVK Bootstrap Render Pass", 0.04f, 0.35f, 0.75f);
+    BeginDebugLabel(commandBuffer, _volumetricCloudsEnabled ? "PoseidonVK World Render Pass"
+                                                             : "PoseidonVK Direct Render Pass",
+                    0.04f, 0.35f, 0.75f);
 
     VkClearValue clearValues[2]{};
     clearValues[0].color = _clearColor;
@@ -2389,7 +3041,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     VkRenderPassBeginInfo renderPassInfo{};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     renderPassInfo.renderPass = _renderPass;
-    renderPassInfo.framebuffer = _framebuffers[imageIndex];
+    renderPassInfo.framebuffer = _volumetricCloudsEnabled ? _worldFramebuffer : _framebuffers[imageIndex];
     renderPassInfo.renderArea.offset = {0, 0};
     renderPassInfo.renderArea.extent = _swapchainExtent;
     renderPassInfo.clearValueCount = 2;
@@ -2436,10 +3088,25 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                                 &_frameDescriptorSet, 0, nullptr);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
     }
-    if (_scenePipeline)
+    enum class SceneGroup
     {
-        VkPipeline lastBoundPipeline = _scenePipeline;
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipeline);
+        WorldBase,
+        WorldLate,
+        Present,
+    };
+    auto recordSceneDraws = [&](SceneGroup group)
+    {
+        const VkPipeline fallbackScenePipeline = group == SceneGroup::WorldLate   ? _worldLateScenePipeline
+                                                : group == SceneGroup::Present    ? _cockpitScenePipeline
+                                                                                   : _scenePipeline;
+        vk::PipelineCacheVK& scenePipelineCache = group == SceneGroup::WorldLate ? _worldLateScenePipelineCache
+                                                 : group == SceneGroup::Present ? _cockpitScenePipelineCache
+                                                                               : _scenePipelineCache;
+        if (!fallbackScenePipeline)
+            return;
+
+        VkPipeline lastBoundPipeline = fallbackScenePipeline;
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, fallbackScenePipeline);
         if (_frameDescriptorSet)
         {
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipelineLayout, 0, 1,
@@ -2457,6 +3124,31 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
             {
                 vk::PipelineKeyVK key;
                 const vk::DrawConstantsVK& draw = _lastDrawConstants[command.drawIndex];
+                const auto pass = static_cast<render::PassKind>(draw.pass);
+                SceneGroup drawGroup = SceneGroup::WorldBase;
+                switch (pass)
+                {
+                    case render::PassKind::WorldTransparent:
+                    case render::PassKind::WorldLight:
+                        drawGroup = SceneGroup::WorldLate;
+                        break;
+                    case render::PassKind::CockpitOpaque:
+                    case render::PassKind::CockpitCutout:
+                    case render::PassKind::CockpitTransparent:
+                    case render::PassKind::ScreenSpace3D:
+                        drawGroup = SceneGroup::Present;
+                        break;
+                    case render::PassKind::Sky:
+                    case render::PassKind::TerrainOpaque:
+                    case render::PassKind::WorldOpaque:
+                    case render::PassKind::WorldCutout:
+                    case render::PassKind::SurfaceOverlay:
+                    case render::PassKind::WorldWater:
+                    case render::PassKind::WorldShadow:
+                        break;
+                }
+                if (_volumetricCloudsEnabled && drawGroup != group)
+                    continue;
 
                 // Log first few draws and any with missing resources
                 static std::uint32_t s_loggedDrawIdx = 0;
@@ -2476,10 +3168,12 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                 key.depth = static_cast<render::DepthMode>(draw.depth);
                 key.blend = static_cast<render::BlendMode>(draw.blend);
                 key.surface = static_cast<render::SurfaceMode>(draw.surface);
+                if (group == SceneGroup::WorldLate)
+                    key.depth = render::DepthMode::ReadOnly;
 
-                VkPipeline pipeline = _scenePipelineCache.Get(key);
+                VkPipeline pipeline = scenePipelineCache.Get(key);
                 if (!pipeline)
-                    pipeline = _scenePipeline;
+                    pipeline = fallbackScenePipeline;
 
                 if (pipeline != lastBoundPipeline)
                 {
@@ -2603,7 +3297,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                     vkCmdDrawIndexed(commandBuffer, indexCount, 1, firstIndex, 0, 0);
             }
         }
-        else if (_hasFrameConstants)
+        else if (group == SceneGroup::WorldBase && _hasFrameConstants)
         {
             // No drawable scene commands yet, but frame constants are available:
             // draw the bring-up quad under the real camera transform so the scene
@@ -2635,8 +3329,40 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                                vk::kScenePushConstantsSize, &sceneConstants);
             vkCmdDrawIndexed(commandBuffer, kSceneQuadIndexCount, 1, 0, 0, 0);
         }
-        RecordScreenDraws(commandBuffer, vk::ScreenDrawPhaseVK::Overlay);
+    };
+    recordSceneDraws(SceneGroup::WorldBase);
+    if (_volumetricCloudsEnabled)
+    {
+        vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
+        if (_volumetricCloudPipeline && _volumetricCloudDescriptorSet && _hasFrameConstants)
+        {
+            BeginDebugLabel(commandBuffer, "PoseidonVK Volumetric Clouds", 0.85f, 0.85f, 0.95f);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _volumetricCloudPipeline);
+            VkDescriptorSet cloudSets[] = {_frameDescriptorSet, _volumetricCloudDescriptorSet};
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _volumetricCloudPipelineLayout, 0, 2,
+                                    cloudSets, 0, nullptr);
+            vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+            EndDebugLabel(commandBuffer);
+        }
+        vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
+        recordSceneDraws(SceneGroup::WorldLate);
+        vkCmdEndRenderPass(commandBuffer);
+        EndDebugLabel(commandBuffer);
+
+        BeginDebugLabel(commandBuffer, "PoseidonVK Present Render Pass", 0.18f, 0.65f, 0.42f);
+        renderPassInfo.renderPass = _presentRenderPass;
+        renderPassInfo.framebuffer = _framebuffers[imageIndex];
+        vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        if (_worldCompositePipeline && _worldCompositeDescriptorSet)
+        {
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _worldCompositePipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _worldCompositePipelineLayout, 0,
+                                    1, &_worldCompositeDescriptorSet, 0, nullptr);
+            vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        }
+        recordSceneDraws(SceneGroup::Present);
     }
+    RecordScreenDraws(commandBuffer, vk::ScreenDrawPhaseVK::Overlay);
     vkCmdEndRenderPass(commandBuffer);
 
     EndDebugLabel(commandBuffer);
@@ -2655,17 +3381,41 @@ void EngineVK::DestroySwapchain()
     // Cached pipelines reference the render pass destroyed below. They must be
     // recreated for the new swapchain's render pass and viewport dimensions.
     _scenePipelineCache.Destroy(_device);
+    _cockpitScenePipelineCache.Destroy(_device);
+    _worldLateScenePipelineCache.Destroy(_device);
 
     if (_proceduralSkyPipeline)
     {
         vkDestroyPipeline(_device, _proceduralSkyPipeline, nullptr);
         _proceduralSkyPipeline = VK_NULL_HANDLE;
     }
+    if (_volumetricCloudPipeline)
+    {
+        vkDestroyPipeline(_device, _volumetricCloudPipeline, nullptr);
+        _volumetricCloudPipeline = VK_NULL_HANDLE;
+    }
+    if (_worldCompositePipeline)
+    {
+        vkDestroyPipeline(_device, _worldCompositePipeline, nullptr);
+        _worldCompositePipeline = VK_NULL_HANDLE;
+    }
+    DestroyVolumetricCloudDescriptorResources();
+    DestroyWorldCompositeDescriptorResources();
 
     if (_scenePipeline)
     {
         vkDestroyPipeline(_device, _scenePipeline, nullptr);
         _scenePipeline = VK_NULL_HANDLE;
+    }
+    if (_cockpitScenePipeline)
+    {
+        vkDestroyPipeline(_device, _cockpitScenePipeline, nullptr);
+        _cockpitScenePipeline = VK_NULL_HANDLE;
+    }
+    if (_worldLateScenePipeline)
+    {
+        vkDestroyPipeline(_device, _worldLateScenePipeline, nullptr);
+        _worldLateScenePipeline = VK_NULL_HANDLE;
     }
     if (_bootstrapPipeline)
     {
@@ -2677,6 +3427,11 @@ void EngineVK::DestroySwapchain()
         vkDestroyPipeline(_device, _screenPipeline, nullptr);
         _screenPipeline = VK_NULL_HANDLE;
     }
+    if (_screenOverlayPipeline)
+    {
+        vkDestroyPipeline(_device, _screenOverlayPipeline, nullptr);
+        _screenOverlayPipeline = VK_NULL_HANDLE;
+    }
 
     for (VkFramebuffer framebuffer : _framebuffers)
     {
@@ -2684,6 +3439,14 @@ void EngineVK::DestroySwapchain()
             vkDestroyFramebuffer(_device, framebuffer, nullptr);
     }
     _framebuffers.clear();
+
+    DestroyWorldTarget();
+
+    if (_presentRenderPass)
+    {
+        vkDestroyRenderPass(_device, _presentRenderPass, nullptr);
+        _presentRenderPass = VK_NULL_HANDLE;
+    }
 
     if (_renderPass)
     {
@@ -2759,6 +3522,8 @@ void EngineVK::DestroyScenePipelineLayout()
     LOG_INFO(Graphics, "Vulkan: DestroyScenePipelineLayout - fragmentModule={}, vertexModule={}, layout={}",
              (void*)_sceneFragmentModule, (void*)_sceneVertexModule, (void*)_scenePipelineLayout);
     _scenePipelineCache.Destroy(_device);
+    _cockpitScenePipelineCache.Destroy(_device);
+    _worldLateScenePipelineCache.Destroy(_device);
 
     if (_sceneFragmentModule)
     {
@@ -2781,10 +3546,17 @@ void EngineVK::DestroyScreenPipeline()
 {
     if (_device)
         _screenPipelineCache.Destroy(_device);
+    if (_device)
+        _screenOverlayPipelineCache.Destroy(_device);
     if (_device && _screenPipeline)
     {
         vkDestroyPipeline(_device, _screenPipeline, nullptr);
         _screenPipeline = VK_NULL_HANDLE;
+    }
+    if (_device && _screenOverlayPipeline)
+    {
+        vkDestroyPipeline(_device, _screenOverlayPipeline, nullptr);
+        _screenOverlayPipeline = VK_NULL_HANDLE;
     }
 }
 
@@ -2839,9 +3611,13 @@ bool EngineVK::RecreateSwapchain()
 
     vkDeviceWaitIdle(_device);
     DestroySwapchain();
-    const bool recreated = CreateSwapchain() && CreateBootstrapPipeline() && CreateScenePipeline() &&
-                           CreateProceduralSkyPipeline() &&
-                           CreateScreenPipeline() && CreateSyncObjects();
+    const bool recreated = CreateSwapchain() &&
+                            (!_volumetricCloudsEnabled ||
+                             (CreateVolumetricCloudDescriptorSet() && CreateWorldCompositeDescriptorSet())) &&
+                            CreateBootstrapPipeline() && CreateScenePipeline() && CreateProceduralSkyPipeline() &&
+                            (!_volumetricCloudsEnabled ||
+                             (CreateVolumetricCloudPipeline() && CreateWorldCompositePipeline())) &&
+                            CreateScreenPipeline() && CreateSyncObjects();
     _swapchainDirty = !recreated;
     return recreated;
 }
@@ -2959,6 +3735,8 @@ void EngineVK::Shutdown()
             vkDestroyPipelineLayout(_device, _pipelineLayout, nullptr);
             _pipelineLayout = VK_NULL_HANDLE;
         }
+        DestroyVolumetricCloudPipelineLayout();
+        DestroyWorldCompositePipelineLayout();
         DestroyScenePipelineLayout();
         DestroyFrameDescriptorResources();
         DestroyTextureDescriptorResources();
@@ -3733,8 +4511,17 @@ void EngineVK::DrawSection(const FaceArray& faces, Offset begin, Offset end)
 
 void EngineVK::PrepareMesh(const render::LegacySpec& spec, ClipFlags clipFlags)
 {
-    // Software-T&L vertices already carry their projected screen coordinates.
-    _screenMeshPhase = vk::ScreenDrawPhaseFromLegacyContext(spec, clipFlags);
+    if (_volumetricCloudsEnabled)
+    {
+        // Background software-T&L belongs to the world target; overlay batches
+        // use the fresh depth attachment in the present pass.
+        _screenMeshPhase = vk::ScreenDrawPhaseFromLegacyContext(spec, clipFlags);
+    }
+    else
+    {
+        _screenMeshPhase = ProceduralSkyActive() ? vk::ScreenDrawPhaseVK::Overlay
+                                                  : vk::ScreenDrawPhaseFromLegacyContext(spec, clipFlags);
+    }
 }
 
 void EngineVK::BeginMesh(TLVertexTable& mesh, const render::LegacySpec& /*spec*/)
@@ -3834,10 +4621,14 @@ void EngineVK::RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPh
         if (batch.phase != phase || batch.indexCount == 0)
             continue;
 
-        const VkPipeline pipeline = _screenPipelineCache.Get(vk::KeyFromDescriptor(batch.descriptor));
+        const bool useOverlaySubpass = phase == vk::ScreenDrawPhaseVK::Overlay && _volumetricCloudsEnabled;
+        vk::PipelineCacheVK& pipelineCache = useOverlaySubpass ? _screenOverlayPipelineCache : _screenPipelineCache;
+        const VkPipeline fallbackPipeline = useOverlaySubpass ? _screenOverlayPipeline : _screenPipeline;
+        vk::PipelineKeyVK pipelineKey = vk::KeyFromDescriptor(batch.descriptor);
+        const VkPipeline pipeline = pipelineCache.Get(pipelineKey);
         if (pipeline != lastBoundPipeline)
         {
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline ? pipeline : _screenPipeline);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline ? pipeline : fallbackPipeline);
             lastBoundPipeline = pipeline;
         }
 

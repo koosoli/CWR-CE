@@ -33,7 +33,10 @@ void main()
     color = mix(color, fog, horizonHaze * 0.32 * day);
 
     float sunDot = max(dot(ray, sun), 0.0);
-    color += vec3(1.0, 0.48, 0.14) * pow(sunDot, 48.0) * 0.35;
+    // This is atmospheric forward scattering, not post-process bloom: it is
+    // visible only in the sky and remains correctly occluded by world geometry.
+    color += vec3(1.0, 0.48, 0.14) * pow(sunDot, 10.0) * 0.28;
+    color += vec3(1.0, 0.72, 0.38) * pow(sunDot, 48.0) * 0.45;
     color += vec3(1.0, 0.88, 0.62) * smoothstep(0.99993, 0.99998, sunDot) * 2.0;
 
     // The direct UNORM swapchain expects display-referred output until HDR is

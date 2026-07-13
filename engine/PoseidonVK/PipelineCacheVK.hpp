@@ -87,10 +87,11 @@ public:
               VkPipelineLayout layout,
               VkShaderModule vertModule,
               VkShaderModule fragModule,
-               VkPipelineVertexInputStateCreateInfo vertexInput,
-               VkPipelineInputAssemblyStateCreateInfo inputAssembly,
-               VkPipelineViewportStateCreateInfo viewportState,
-               VkPipelineMultisampleStateCreateInfo multisampling)
+              VkPipelineVertexInputStateCreateInfo vertexInput,
+              VkPipelineInputAssemblyStateCreateInfo inputAssembly,
+              VkPipelineViewportStateCreateInfo viewportState,
+              VkPipelineMultisampleStateCreateInfo multisampling,
+              uint32_t subpass = 0)
     {
         _device        = device;
         _renderPass    = renderPass;
@@ -101,6 +102,7 @@ public:
         _inputAssembly = inputAssembly;
         _viewportState = viewportState;
         _multisampling = multisampling;
+        _subpass       = subpass;
 
         // Make deep copies of pointers pointing to temporary stack variables
         if (vertexInput.pVertexBindingDescriptions && vertexInput.vertexBindingDescriptionCount > 0)
@@ -215,7 +217,7 @@ private:
         info.pColorBlendState    = &colorBlending;
         info.layout              = _layout;
         info.renderPass          = _renderPass;
-        info.subpass             = 0;
+        info.subpass             = _subpass;
 
         VkPipeline pipeline = VK_NULL_HANDLE;
         vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &info, nullptr, &pipeline);
@@ -227,6 +229,7 @@ private:
     VkPipelineLayout _layout       = VK_NULL_HANDLE;
     VkShaderModule   _vertModule    = VK_NULL_HANDLE;
     VkShaderModule   _fragModule    = VK_NULL_HANDLE;
+    uint32_t         _subpass       = 0;
 
     VkPipelineVertexInputStateCreateInfo   _vertexInput{};
     VkPipelineInputAssemblyStateCreateInfo _inputAssembly{};
