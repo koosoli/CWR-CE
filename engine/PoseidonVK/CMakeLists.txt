@@ -5,6 +5,7 @@ file(GLOB_RECURSE POSEIDON_VK_SOURCES CONFIGURE_DEPENDS
 set(POSEIDON_VK_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/BufferVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/BootstrapPushConstantsVK.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/CloudConstantsVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DescriptorBindingsVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/DrawConstantsVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/EngineVK.hpp
@@ -30,8 +31,12 @@ set(POSEIDON_VK_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/procedural_sky.frag.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/volumetric_clouds.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/volumetric_clouds.frag.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/cloud_lighting.frag.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/cloud_temporal.frag.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/cloud_composite.frag.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/world_composite.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/world_composite.frag.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/eye_adaptation.frag.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/screen.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/screen.frag.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepth.vert.glsl

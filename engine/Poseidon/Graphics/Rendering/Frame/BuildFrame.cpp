@@ -53,11 +53,17 @@ Frame BuildFrame(const SceneInputs& s)
 {
     Frame f;
     f.camera = s.camera;
+    f.cameraPosition[0] = s.cameraPosition[0];
+    f.cameraPosition[1] = s.cameraPosition[1];
+    f.cameraPosition[2] = s.cameraPosition[2];
     f.sunMatrix = s.sunMatrix;
     f.sunEnabled = s.sunEnabled;
     f.sunDirection[0] = s.sunDirection[0];
     f.sunDirection[1] = s.sunDirection[1];
     f.sunDirection[2] = s.sunDirection[2];
+    f.wind[0] = s.wind[0];
+    f.wind[1] = s.wind[1];
+    f.wind[2] = s.wind[2];
     f.localLightScale = s.localLightScale;
     f.localLightCount = s.localLightCount;
     if (f.localLightCount > kMaxFrameLocalLights)

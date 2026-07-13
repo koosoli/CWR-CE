@@ -14,6 +14,7 @@
 #include <Poseidon/Core/Global.hpp>
 #include <unordered_map>
 #include <PoseidonVK/BufferVK.hpp>
+#include <PoseidonVK/CloudConstantsVK.hpp>
 #include <PoseidonVK/DescriptorBindingsVK.hpp>
 #include <PoseidonVK/DrawConstantsVK.hpp>
 #include <PoseidonVK/RenderStateVK.hpp>
@@ -33,6 +34,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -73,9 +75,18 @@ struct WorldCompositePushConstants
 {
     float exposure;
     uint32_t hdrEnabled;
+    uint32_t exposureHistoryValid;
 };
 
-static_assert(sizeof(WorldCompositePushConstants) == 8);
+static_assert(sizeof(WorldCompositePushConstants) == 12);
+
+struct EyeAdaptationPushConstants
+{
+    float baseExposure;
+    uint32_t historyValid;
+};
+
+static_assert(sizeof(EyeAdaptationPushConstants) == 8);
 
 enum class SceneGroup : std::uint32_t
 {
@@ -131,11 +142,23 @@ constexpr const char kVolumetricCloudVertexShader[] =
 constexpr const char kVolumetricCloudFragmentShader[] =
 #include <PoseidonVK/Shaders/volumetric_clouds.frag.glsl.hpp>
     ;
+constexpr const char kCloudLightingFragmentShader[] =
+#include <PoseidonVK/Shaders/cloud_lighting.frag.glsl.hpp>
+    ;
+constexpr const char kCloudTemporalFragmentShader[] =
+#include <PoseidonVK/Shaders/cloud_temporal.frag.glsl.hpp>
+    ;
+constexpr const char kCloudCompositeFragmentShader[] =
+#include <PoseidonVK/Shaders/cloud_composite.frag.glsl.hpp>
+    ;
 constexpr const char kWorldCompositeVertexShader[] =
 #include <PoseidonVK/Shaders/world_composite.vert.glsl.hpp>
     ;
 constexpr const char kWorldCompositeFragmentShader[] =
 #include <PoseidonVK/Shaders/world_composite.frag.glsl.hpp>
+    ;
+constexpr const char kEyeAdaptationFragmentShader[] =
+#include <PoseidonVK/Shaders/eye_adaptation.frag.glsl.hpp>
     ;
 constexpr const char kScreenVertexShader[] =
 #include <PoseidonVK/Shaders/screen.vert.glsl.hpp>
@@ -436,6 +459,8 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
         _volumetricCloudsEnabled = std::strcmp(value, "0") != 0;
     if (const char* value = std::getenv("POSEIDON_VK_HDR"))
         _hdrEnabled = std::strcmp(value, "0") != 0;
+    if (const char* value = std::getenv("POSEIDON_VK_TEMPORAL_EXPOSURE"))
+        _temporalExposureEnabled = std::strcmp(value, "0") != 0;
 
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
@@ -501,20 +526,25 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
     }
 
     if (!CreateInstance() || !CreateDebugMessenger() || !CreateSurface() || !PickPhysicalDevice() || !CreateDevice() ||
-        !CreateGpuTimingResources() || !CreateFrameConstantsBuffer() || !CreateBootstrapVertexBuffer() || !CreateBootstrapIndexBuffer() ||
+         !CreateGpuTimingResources() || !CreateFrameConstantsBuffer() ||
+          (_volumetricCloudsEnabled && !CreateCloudConstantsBuffer()) || !CreateBootstrapVertexBuffer() || !CreateBootstrapIndexBuffer() ||
          !CreateSceneVertexBuffer() || !CreateSceneIndexBuffer() || !EnsureDrawConstantsBufferCapacity(1) ||
          !CreateFrameDescriptorLayout() || !CreateTextureDescriptorLayout() ||
-          (_volumetricCloudsEnabled && !CreateVolumetricCloudDescriptorLayout()) ||
-          (WorldCompositionActive() && !CreateWorldCompositeDescriptorLayout()) || !CreatePipelineLayout() ||
-         !CreateTextureDescriptorPool() || !CreateScenePipelineLayout() || !CreateFrameDescriptorSet() ||
-          (_volumetricCloudsEnabled && !CreateVolumetricCloudPipelineLayout()) ||
-          (WorldCompositionActive() && !CreateWorldCompositePipelineLayout()) || !CreateCommandPool() ||
-         !CreateSwapchain() ||
-          (_volumetricCloudsEnabled && !CreateVolumetricCloudDescriptorSet()) ||
-          (WorldCompositionActive() && !CreateWorldCompositeDescriptorSet()) ||
-         !CreateBootstrapPipeline() || !CreateScenePipeline() || !CreateProceduralSkyPipeline() ||
-         (_volumetricCloudsEnabled && !CreateVolumetricCloudPipeline()) ||
-          (WorldCompositionActive() && !CreateWorldCompositePipeline()) ||
+           (_volumetricCloudsEnabled && !CreateVolumetricCloudDescriptorLayout()) ||
+           (WorldCompositionActive() && !CreateWorldCompositeDescriptorLayout()) || !CreatePipelineLayout() ||
+           (_temporalExposureEnabled && !CreateEyeAdaptationDescriptorLayout()) ||
+          !CreateTextureDescriptorPool() || !CreateScenePipelineLayout() || !CreateFrameDescriptorSet() ||
+           (_volumetricCloudsEnabled && !CreateVolumetricCloudPipelineLayout()) ||
+           (WorldCompositionActive() && !CreateWorldCompositePipelineLayout()) ||
+           (_temporalExposureEnabled && !CreateEyeAdaptationPipelineLayout()) || !CreateCommandPool() ||
+          !CreateSwapchain() ||
+           (_volumetricCloudsEnabled && !CreateVolumetricCloudDescriptorSet()) ||
+           (_temporalExposureEnabled && !CreateEyeAdaptationDescriptorSet()) ||
+           (WorldCompositionActive() && !CreateWorldCompositeDescriptorSet()) ||
+          !CreateBootstrapPipeline() || !CreateScenePipeline() || !CreateProceduralSkyPipeline() ||
+           (_volumetricCloudsEnabled && !CreateVolumetricCloudPipeline()) ||
+           (_temporalExposureEnabled && !CreateEyeAdaptationPipeline()) ||
+           (WorldCompositionActive() && !CreateWorldCompositePipeline()) ||
          !CreateScreenDescriptorLayout() || !CreateScreenPipelineLayout() || !CreateScreenPipeline() ||
         !CreateSyncObjects())
     {
@@ -549,7 +579,7 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
     if (_proceduralSkyEnabled)
         LOG_INFO(Graphics, "Vulkan: experimental procedural sky is enabled");
     if (_volumetricCloudsEnabled)
-        LOG_INFO(Graphics, "Vulkan: experimental depth-aware volumetric clouds are enabled");
+        LOG_INFO(Graphics, "Vulkan: temporal fixed-world volumetric clouds are enabled");
     if (_hdrEnabled)
         LOG_INFO(Graphics, "Vulkan: HDR world composition is enabled (R16G16B16A16_SFLOAT, exposure={})", _hdrExposure);
 
@@ -599,7 +629,10 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
     _lastFrameConstants.grassParams[2] = _grassParam[2];
     _lastFrameConstants.grassParams[3] = _grassParam[3];
     _lastFrameConstants.time[0] = Glob.time.toFloat();
+    _lastFrameConstants.time[1] = static_cast<float>(SDL_GetTicks()) * 0.001f;
+    _lastFrameConstants.wind[3] = _volumetricCloudsEnabled ? 1.0f : 0.0f;
     _lastFrameConstants.lightingParams[3] = _nightEye;
+    UpdateCloudConstants();
 
     _lastDrawConstants = vk::BuildDrawConstants(frame);
     _lastSceneDrawCommands = vk::BuildSceneDrawCommands(_lastDrawConstants);
@@ -667,6 +700,8 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
     }
 
     UploadFrameConstants();
+    if (_volumetricCloudsEnabled)
+        vk::UploadMappedBuffer(_cloudConstantsBuffer, &_cloudConstants, sizeof(_cloudConstants));
     UploadDrawConstants();
 }
 
@@ -1573,6 +1608,10 @@ bool EngineVK::CreateSwapchain()
         return false;
     if (WorldCompositionActive() && !CreateWorldTarget())
         return false;
+    if (_volumetricCloudsEnabled && !CreateCloudResources())
+        return false;
+    if (_temporalExposureEnabled && !CreateEyeAdaptationResources())
+        return false;
 
     _framebuffers.resize(actualImageCount, VK_NULL_HANDLE);
     for (uint32_t i = 0; i < actualImageCount; ++i)
@@ -1754,6 +1793,63 @@ void EngineVK::DestroyDepthResources()
     _depthFormat = VK_FORMAT_UNDEFINED;
 }
 
+bool EngineVK::CreateCloudConstantsBuffer()
+{
+    const VkResult result = vk::CreateHostVisibleBuffer(_physicalDevice, _device, sizeof(vk::CloudConstantsVK),
+                                                        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, _cloudConstantsBuffer);
+    if (result != VK_SUCCESS)
+    {
+        LOG_ERROR(Graphics, "Vulkan: cloud constants buffer creation failed: {}", VkResultName(result));
+        return false;
+    }
+    vk::UploadMappedBuffer(_cloudConstantsBuffer, &_cloudConstants, sizeof(_cloudConstants));
+    SetObjectName(VK_OBJECT_TYPE_BUFFER, VulkanObjectHandle(_cloudConstantsBuffer.buffer),
+                  "PoseidonVK Cloud Constants Buffer");
+    return true;
+}
+
+void EngineVK::UpdateCloudConstants()
+{
+    if (!_volumetricCloudsEnabled)
+        return;
+
+    const float now = _lastFrameConstants.time[1];
+    const float delta = _cloudLastUpdateSeconds < 0.0f ? 0.0f : std::clamp(now - _cloudLastUpdateSeconds, 0.0f, 0.1f);
+    _cloudLastUpdateSeconds = now;
+    const vk::CloudConstantsVK previous = _cloudConstants;
+    constexpr float kVolumeGrid = 16384.0f;
+    constexpr float kVolumeHalfExtent = kVolumeGrid * 0.5f;
+    const float originX = std::floor(_lastFrameConstants.cloudOrigin[0] / kVolumeGrid) * kVolumeGrid + kVolumeHalfExtent;
+    const float originZ = std::floor(_lastFrameConstants.cloudOrigin[2] / kVolumeGrid) * kVolumeGrid + kVolumeHalfExtent;
+    const bool movedVolume = _cloudHistoryValid &&
+                             (originX != previous.volumeOrigin[0] || originZ != previous.volumeOrigin[2]);
+
+    _cloudConstants.previousView = _previousCloudFrameConstants.view;
+    _cloudConstants.previousProjection = _previousCloudFrameConstants.projection;
+    std::memcpy(_cloudConstants.previousCameraPosition, previous.cameraPosition, sizeof(_cloudConstants.previousCameraPosition));
+    std::memcpy(_cloudConstants.previousWindOffset, previous.windOffset, sizeof(_cloudConstants.previousWindOffset));
+    _cloudConstants.cameraPosition[0] = _lastFrameConstants.cloudOrigin[0];
+    _cloudConstants.cameraPosition[1] = _lastFrameConstants.cloudOrigin[1];
+    _cloudConstants.cameraPosition[2] = _lastFrameConstants.cloudOrigin[2];
+    _cloudConstants.windOffset[0] = previous.windOffset[0] + _lastFrameConstants.wind[0] * delta;
+    _cloudConstants.windOffset[1] = previous.windOffset[1] + _lastFrameConstants.wind[1] * delta;
+    _cloudConstants.windOffset[2] = previous.windOffset[2] + _lastFrameConstants.wind[2] * delta;
+    _cloudConstants.volumeOrigin[0] = originX;
+    _cloudConstants.volumeOrigin[1] = 4000.0f;
+    _cloudConstants.volumeOrigin[2] = originZ;
+    _cloudConstants.volumeOrigin[3] = kVolumeHalfExtent;
+    _cloudConstants.renderSizeAndHistory[0] = static_cast<float>(_cloudCurrent.width);
+    _cloudConstants.renderSizeAndHistory[1] = static_cast<float>(_cloudCurrent.height);
+    _cloudConstants.renderSizeAndHistory[2] = _cloudHistoryValid && !movedVolume ? 1.0f : 0.0f;
+    _cloudConstants.renderSizeAndHistory[3] = static_cast<float>(_cloudFrameIndex++);
+    _lastFrameConstants.windOffset[0] = _cloudConstants.windOffset[0];
+    _lastFrameConstants.windOffset[1] = _cloudConstants.windOffset[1];
+    _lastFrameConstants.windOffset[2] = _cloudConstants.windOffset[2];
+    _previousCloudFrameConstants = _lastFrameConstants;
+    if (movedVolume)
+        _cloudHistoryValid = false;
+}
+
 bool EngineVK::CreateWorldTarget()
 {
     if (_hdrEnabled)
@@ -1818,7 +1914,8 @@ bool EngineVK::CreateWorldTarget()
                       VK_IMAGE_ASPECT_COLOR_BIT, _worldColorImage, _worldColorImageMemory, _worldColorImageView,
                       _hdrEnabled ? "PoseidonVK World HDR Color" : "PoseidonVK World UNORM Color") ||
         !createImage(_depthFormat,
-                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
+                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT |
+                          VK_IMAGE_USAGE_SAMPLED_BIT,
                      VK_IMAGE_ASPECT_DEPTH_BIT, _worldDepthImage, _worldDepthImageMemory, _worldDepthImageView,
                      "PoseidonVK World Depth"))
     {
@@ -1865,6 +1962,348 @@ void EngineVK::DestroyWorldTarget()
     };
     destroyImage(_worldColorImageView, _worldColorImage, _worldColorImageMemory);
     destroyImage(_worldDepthImageView, _worldDepthImage, _worldDepthImageMemory);
+}
+
+bool EngineVK::CreateCloudResources()
+{
+    if (!_worldColorImageView || !_worldDepthImageView)
+        return false;
+    constexpr VkFormat kCloudFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormatProperties properties{};
+    vkGetPhysicalDeviceFormatProperties(_physicalDevice, kCloudFormat, &properties);
+    const VkFormatFeatureFlags required = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    if ((properties.optimalTilingFeatures & required) != required)
+    {
+        LOG_ERROR(Graphics, "Vulkan: temporal clouds require R16G16B16A16_SFLOAT render-target sampling support");
+        return false;
+    }
+    DestroyCloudResources();
+    const std::uint32_t width = std::max(1u, (_swapchainExtent.width + 1u) / 2u);
+    const std::uint32_t height = std::max(1u, (_swapchainExtent.height + 1u) / 2u);
+    const auto createCloudImage = [&](vk::ImageVK& image, const char* name)
+    {
+        if (vk::CreateImage2D(_physicalDevice, _device, width, height, 1, kCloudFormat,
+                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, image) != VK_SUCCESS)
+            return false;
+        SetObjectName(VK_OBJECT_TYPE_IMAGE, VulkanObjectHandle(image.image), name);
+        return true;
+    };
+    if (!createCloudImage(_cloudLighting, "PoseidonVK Cloud Light Cache") ||
+        !createCloudImage(_cloudCurrent, "PoseidonVK Cloud Raymarch") ||
+        !createCloudImage(_cloudHistory[0], "PoseidonVK Cloud History 0") ||
+        !createCloudImage(_cloudHistory[1], "PoseidonVK Cloud History 1"))
+    {
+        DestroyCloudResources();
+        return false;
+    }
+    // Every cloud target is sampled by a later pass and is reused next frame.
+    // Establish shader-read layout once so the render passes can explicitly
+    // transition from that known state instead of relying on undefined layout.
+    for (vk::ImageVK* image : std::array<vk::ImageVK*, 4>{&_cloudLighting, &_cloudCurrent,
+                                                           &_cloudHistory[0], &_cloudHistory[1]})
+    {
+        vk::TransitionImageLayout(_device, _commandPool, _graphicsQueue, image->image, 1,
+                                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.maxLod = 0.0f;
+    if (vkCreateSampler(_device, &samplerInfo, nullptr, &_cloudSampler) != VK_SUCCESS)
+    {
+        DestroyCloudResources();
+        return false;
+    }
+    const auto createColorPass = [&](VkRenderPass& pass, VkFormat format, VkAttachmentLoadOp loadOp)
+    {
+        VkAttachmentDescription attachment{};
+        attachment.format = format;
+        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        attachment.loadOp = loadOp;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorRef;
+        VkSubpassDependency dependencies[2] = {};
+        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[0].dstSubpass = 0;
+        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].srcSubpass = 0;
+        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT;
+        VkRenderPassCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+        info.attachmentCount = 1;
+        info.pAttachments = &attachment;
+        info.subpassCount = 1;
+        info.pSubpasses = &subpass;
+        info.dependencyCount = 2;
+        info.pDependencies = dependencies;
+        return vkCreateRenderPass(_device, &info, nullptr, &pass) == VK_SUCCESS;
+    };
+    if (!createColorPass(_cloudLightingRenderPass, kCloudFormat, VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
+        !createColorPass(_cloudRaymarchRenderPass, kCloudFormat, VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
+        !createColorPass(_cloudTemporalRenderPass, kCloudFormat, VK_ATTACHMENT_LOAD_OP_DONT_CARE) ||
+        !createColorPass(_cloudCompositeRenderPass,
+                         _hdrEnabled ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_B8G8R8A8_UNORM,
+                         VK_ATTACHMENT_LOAD_OP_LOAD))
+    {
+        DestroyCloudResources();
+        return false;
+    }
+    VkAttachmentDescription lateAttachments[2] = {};
+    lateAttachments[0].format = _hdrEnabled ? VK_FORMAT_R16G16B16A16_SFLOAT : VK_FORMAT_B8G8R8A8_UNORM;
+    lateAttachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    lateAttachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    lateAttachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    lateAttachments[0].initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    lateAttachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    lateAttachments[1].format = _depthFormat;
+    lateAttachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    lateAttachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    lateAttachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    lateAttachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    lateAttachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    lateAttachments[1].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    lateAttachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    VkAttachmentReference lateColor{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference lateDepth{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    VkSubpassDescription lateSubpass{};
+    lateSubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    lateSubpass.colorAttachmentCount = 1;
+    lateSubpass.pColorAttachments = &lateColor;
+    lateSubpass.pDepthStencilAttachment = &lateDepth;
+    VkSubpassDependency lateDependencies[2] = {};
+    lateDependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    lateDependencies[0].dstSubpass = 0;
+    lateDependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    lateDependencies[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    lateDependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                                       VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    lateDependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                        VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+    lateDependencies[1].srcSubpass = 0;
+    lateDependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    lateDependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    lateDependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    lateDependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    lateDependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    VkRenderPassCreateInfo lateInfo{};
+    lateInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    lateInfo.attachmentCount = 2;
+    lateInfo.pAttachments = lateAttachments;
+    lateInfo.subpassCount = 1;
+    lateInfo.pSubpasses = &lateSubpass;
+    lateInfo.dependencyCount = 2;
+    lateInfo.pDependencies = lateDependencies;
+    if (vkCreateRenderPass(_device, &lateInfo, nullptr, &_worldLateRenderPass) != VK_SUCCESS)
+    {
+        DestroyCloudResources();
+        return false;
+    }
+    const auto createFramebuffer = [&](VkRenderPass pass, VkImageView view, VkFramebuffer& framebuffer,
+                                       std::uint32_t framebufferWidth, std::uint32_t framebufferHeight)
+    {
+        VkFramebufferCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        info.renderPass = pass;
+        info.attachmentCount = 1;
+        info.pAttachments = &view;
+        info.width = framebufferWidth;
+        info.height = framebufferHeight;
+        info.layers = 1;
+        return vkCreateFramebuffer(_device, &info, nullptr, &framebuffer) == VK_SUCCESS;
+    };
+    if (!createFramebuffer(_cloudLightingRenderPass, _cloudLighting.view, _cloudLightingFramebuffer, width, height) ||
+        !createFramebuffer(_cloudRaymarchRenderPass, _cloudCurrent.view, _cloudRaymarchFramebuffer, width, height) ||
+        !createFramebuffer(_cloudTemporalRenderPass, _cloudHistory[0].view, _cloudTemporalFramebuffers[0], width, height) ||
+        !createFramebuffer(_cloudTemporalRenderPass, _cloudHistory[1].view, _cloudTemporalFramebuffers[1], width, height) ||
+        !createFramebuffer(_cloudCompositeRenderPass, _worldColorImageView, _cloudCompositeFramebuffer,
+                           _swapchainExtent.width, _swapchainExtent.height))
+    {
+        DestroyCloudResources();
+        return false;
+    }
+    VkImageView lateViews[] = {_worldColorImageView, _worldDepthImageView};
+    VkFramebufferCreateInfo lateFramebufferInfo{};
+    lateFramebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    lateFramebufferInfo.renderPass = _worldLateRenderPass;
+    lateFramebufferInfo.attachmentCount = 2;
+    lateFramebufferInfo.pAttachments = lateViews;
+    lateFramebufferInfo.width = _swapchainExtent.width;
+    lateFramebufferInfo.height = _swapchainExtent.height;
+    lateFramebufferInfo.layers = 1;
+    if (vkCreateFramebuffer(_device, &lateFramebufferInfo, nullptr, &_worldLateFramebuffer) != VK_SUCCESS)
+    {
+        DestroyCloudResources();
+        return false;
+    }
+    _cloudHistoryValid = false;
+    _cloudHistoryCurrentIndex = 0;
+    return true;
+}
+
+void EngineVK::DestroyCloudResources()
+{
+    for (VkFramebuffer& framebuffer : _cloudTemporalFramebuffers)
+    {
+        if (framebuffer) vkDestroyFramebuffer(_device, framebuffer, nullptr);
+        framebuffer = VK_NULL_HANDLE;
+    }
+    const std::array<VkFramebuffer*, 4> framebuffers = {
+        &_cloudLightingFramebuffer, &_cloudRaymarchFramebuffer, &_cloudCompositeFramebuffer, &_worldLateFramebuffer};
+    for (VkFramebuffer* framebuffer : framebuffers)
+    {
+        if (*framebuffer) vkDestroyFramebuffer(_device, *framebuffer, nullptr);
+        *framebuffer = VK_NULL_HANDLE;
+    }
+    const std::array<VkRenderPass*, 5> passes = {
+        &_cloudLightingRenderPass, &_cloudRaymarchRenderPass, &_cloudTemporalRenderPass, &_cloudCompositeRenderPass,
+        &_worldLateRenderPass};
+    for (VkRenderPass* pass : passes)
+    {
+        if (*pass) vkDestroyRenderPass(_device, *pass, nullptr);
+        *pass = VK_NULL_HANDLE;
+    }
+    if (_cloudSampler) vkDestroySampler(_device, _cloudSampler, nullptr);
+    _cloudSampler = VK_NULL_HANDLE;
+    vk::DestroyImage(_device, _cloudLighting);
+    vk::DestroyImage(_device, _cloudCurrent);
+    for (vk::ImageVK& image : _cloudHistory) vk::DestroyImage(_device, image);
+    _cloudHistoryValid = false;
+    _cloudHistoryCurrentIndex = 0;
+}
+
+bool EngineVK::CreateEyeAdaptationResources()
+{
+    VkFormatProperties properties{};
+    vkGetPhysicalDeviceFormatProperties(_physicalDevice, VK_FORMAT_R16G16_SFLOAT, &properties);
+    constexpr VkFormatFeatureFlags required = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    if ((properties.optimalTilingFeatures & required) != required)
+    {
+        LOG_ERROR(Graphics, "Vulkan: HDR eye adaptation requires R16G16_SFLOAT color attachment and sampling support");
+        return false;
+    }
+
+    DestroyEyeAdaptationResources();
+    for (std::uint32_t i = 0; i < _eyeAdaptationHistory.size(); ++i)
+    {
+        if (vk::CreateImage2D(_physicalDevice, _device, 1, 1, 1, VK_FORMAT_R16G16_SFLOAT,
+                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                              VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, _eyeAdaptationHistory[i]) != VK_SUCCESS)
+        {
+            DestroyEyeAdaptationResources();
+            return false;
+        }
+        const std::string name = "PoseidonVK Eye Adaptation History " + std::to_string(i);
+        SetObjectName(VK_OBJECT_TYPE_IMAGE, VulkanObjectHandle(_eyeAdaptationHistory[i].image), name.c_str());
+        vk::TransitionImageLayout(_device, _commandPool, _graphicsQueue, _eyeAdaptationHistory[i].image, 1,
+                                  VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    VkAttachmentDescription attachment{};
+    attachment.format = VK_FORMAT_R16G16_SFLOAT;
+    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment.initialLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    VkSubpassDependency dependencies[2]{};
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &attachment;
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 2;
+    renderPassInfo.pDependencies = dependencies;
+    if (vkCreateRenderPass(_device, &renderPassInfo, nullptr, &_eyeAdaptationRenderPass) != VK_SUCCESS)
+    {
+        DestroyEyeAdaptationResources();
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_RENDER_PASS, VulkanObjectHandle(_eyeAdaptationRenderPass),
+                  "PoseidonVK Eye Adaptation Render Pass");
+
+    for (std::uint32_t i = 0; i < _eyeAdaptationFramebuffers.size(); ++i)
+    {
+        VkImageView attachmentView = _eyeAdaptationHistory[i].view;
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = _eyeAdaptationRenderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = &attachmentView;
+        framebufferInfo.width = 1;
+        framebufferInfo.height = 1;
+        framebufferInfo.layers = 1;
+        if (vkCreateFramebuffer(_device, &framebufferInfo, nullptr, &_eyeAdaptationFramebuffers[i]) != VK_SUCCESS)
+        {
+            DestroyEyeAdaptationResources();
+            return false;
+        }
+    }
+    _eyeAdaptationHistoryValid = false;
+    _eyeAdaptationPendingWrite = false;
+    _eyeAdaptationCurrentIndex = 0;
+    return true;
+}
+
+void EngineVK::DestroyEyeAdaptationResources()
+{
+    for (VkFramebuffer& framebuffer : _eyeAdaptationFramebuffers)
+    {
+        if (framebuffer)
+            vkDestroyFramebuffer(_device, framebuffer, nullptr);
+        framebuffer = VK_NULL_HANDLE;
+    }
+    if (_eyeAdaptationRenderPass)
+    {
+        vkDestroyRenderPass(_device, _eyeAdaptationRenderPass, nullptr);
+        _eyeAdaptationRenderPass = VK_NULL_HANDLE;
+    }
+    for (vk::ImageVK& image : _eyeAdaptationHistory)
+        vk::DestroyImage(_device, image);
+    _eyeAdaptationHistoryValid = false;
+    _eyeAdaptationPendingWrite = false;
+    _eyeAdaptationCurrentIndex = 0;
 }
 
 bool EngineVK::CreateBootstrapPipeline()
@@ -2186,7 +2625,8 @@ bool EngineVK::CreateScenePipeline()
         VkPipelineDepthStencilStateCreateInfo worldLateDepthStencil =
             vk::BuildDepthStencilState(render::DepthMode::ReadOnly);
         pipelineInfo.pDepthStencilState = &worldLateDepthStencil;
-        pipelineInfo.subpass = 2;
+        pipelineInfo.renderPass = _worldLateRenderPass;
+        pipelineInfo.subpass = 0;
         result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_worldLateScenePipeline);
         if (result == VK_SUCCESS)
         {
@@ -2222,9 +2662,9 @@ bool EngineVK::CreateScenePipeline()
                               vertexInput, inputAssembly, viewportState, multisampling);
     if (WorldCompositionActive())
     {
-        _worldLateScenePipelineCache.Init(_device, _renderPass, _scenePipelineLayout, _sceneVertexModule,
-                                          _sceneFragmentModule, vertexInput, inputAssembly, viewportState,
-                                          multisampling, 2);
+        _worldLateScenePipelineCache.Init(_device, _worldLateRenderPass, _scenePipelineLayout, _sceneVertexModule,
+                                           _sceneFragmentModule, vertexInput, inputAssembly, viewportState,
+                                          multisampling);
         _cockpitScenePipelineCache.Init(_device, _presentRenderPass, _scenePipelineLayout, _sceneVertexModule,
                                          _sceneFragmentModule, vertexInput, inputAssembly, viewportState,
                                          multisampling);
@@ -2350,25 +2790,27 @@ bool EngineVK::CreateProceduralSkyPipeline()
 
 bool EngineVK::CreateVolumetricCloudDescriptorLayout()
 {
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    const std::array<VkDescriptorSetLayoutBinding, 5> bindings = {{
+        {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    }};
 
     VkDescriptorSetLayoutCreateInfo createInfo{};
     createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    createInfo.bindingCount = 1;
-    createInfo.pBindings = &binding;
+    createInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+    createInfo.pBindings = bindings.data();
     const VkResult result = vkCreateDescriptorSetLayout(_device, &createInfo, nullptr,
                                                         &_volumetricCloudDescriptorSetLayout);
     if (result != VK_SUCCESS)
     {
-        LOG_ERROR(Graphics, "Vulkan: cloud depth descriptor layout creation failed: {}", VkResultName(result));
+        LOG_ERROR(Graphics, "Vulkan: cloud descriptor layout creation failed: {}", VkResultName(result));
         return false;
     }
     SetObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET_LAYOUT, VulkanObjectHandle(_volumetricCloudDescriptorSetLayout),
-                  "PoseidonVK Volumetric Cloud Depth Descriptor Layout");
+                  "PoseidonVK Temporal Cloud Descriptor Layout");
     return true;
 }
 
@@ -2393,61 +2835,81 @@ bool EngineVK::CreateVolumetricCloudPipelineLayout()
 bool EngineVK::CreateVolumetricCloudDescriptorSet()
 {
     DestroyVolumetricCloudDescriptorResources();
-    if (!_worldDepthImageView || !_volumetricCloudDescriptorSetLayout)
+    if (!_worldDepthImageView || !_cloudLighting.view || !_cloudCurrent.view || !_cloudHistory[0].view ||
+        !_cloudConstantsBuffer.buffer || !_volumetricCloudDescriptorSetLayout)
         return false;
 
-    VkDescriptorPoolSize poolSize{};
-    poolSize.type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-    poolSize.descriptorCount = 1;
+    const std::array<VkDescriptorPoolSize, 2> poolSizes = {{
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8},
+    }};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    poolInfo.maxSets = 1;
-    poolInfo.poolSizeCount = 1;
-    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = 2;
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
     VkResult result = vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_volumetricCloudDescriptorPool);
     if (result != VK_SUCCESS)
     {
-        LOG_ERROR(Graphics, "Vulkan: cloud depth descriptor pool creation failed: {}", VkResultName(result));
+        LOG_ERROR(Graphics, "Vulkan: cloud descriptor pool creation failed: {}", VkResultName(result));
         return false;
     }
 
     VkDescriptorSetAllocateInfo allocateInfo{};
     allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocateInfo.descriptorPool = _volumetricCloudDescriptorPool;
-    allocateInfo.descriptorSetCount = 1;
-    allocateInfo.pSetLayouts = &_volumetricCloudDescriptorSetLayout;
-    result = vkAllocateDescriptorSets(_device, &allocateInfo, &_volumetricCloudDescriptorSet);
+    VkDescriptorSetLayout layouts[] = {_volumetricCloudDescriptorSetLayout, _volumetricCloudDescriptorSetLayout};
+    allocateInfo.descriptorSetCount = 2;
+    allocateInfo.pSetLayouts = layouts;
+    result = vkAllocateDescriptorSets(_device, &allocateInfo, _volumetricCloudDescriptorSets.data());
     if (result != VK_SUCCESS)
     {
-        LOG_ERROR(Graphics, "Vulkan: cloud depth descriptor set allocation failed: {}", VkResultName(result));
+        LOG_ERROR(Graphics, "Vulkan: cloud descriptor set allocation failed: {}", VkResultName(result));
         DestroyVolumetricCloudDescriptorResources();
         return false;
     }
 
-    VkDescriptorImageInfo depthImageInfo{};
-    depthImageInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    depthImageInfo.imageView = _worldDepthImageView;
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = _volumetricCloudDescriptorSet;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-    write.pImageInfo = &depthImageInfo;
-    vkUpdateDescriptorSets(_device, 1, &write, 0, nullptr);
+    UpdateCloudDescriptorSets(0);
+    _volumetricCloudDescriptorSet = _volumetricCloudDescriptorSets[0];
     SetObjectName(VK_OBJECT_TYPE_DESCRIPTOR_POOL, VulkanObjectHandle(_volumetricCloudDescriptorPool),
-                  "PoseidonVK Volumetric Cloud Descriptor Pool");
-    SetObjectName(VK_OBJECT_TYPE_DESCRIPTOR_SET, VulkanObjectHandle(_volumetricCloudDescriptorSet),
-                  "PoseidonVK Volumetric Cloud Depth Descriptor Set");
+                  "PoseidonVK Temporal Cloud Descriptor Pool");
     return true;
+}
+
+void EngineVK::UpdateCloudDescriptorSets(std::uint32_t historyReadIndex)
+{
+    if (!_volumetricCloudDescriptorSets[0] || !_cloudSampler)
+        return;
+    for (std::uint32_t i = 0; i < _volumetricCloudDescriptorSets.size(); ++i)
+    {
+        const std::uint32_t historyIndex = i == 0 ? historyReadIndex : 1 - historyReadIndex;
+        VkDescriptorBufferInfo constants{_cloudConstantsBuffer.buffer, 0, sizeof(vk::CloudConstantsVK)};
+        VkDescriptorImageInfo images[4] = {};
+        images[0] = {_cloudSampler, _worldDepthImageView, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+        images[1] = {_cloudSampler, _cloudLighting.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        images[2] = {_cloudSampler, _cloudCurrent.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        images[3] = {_cloudSampler, _cloudHistory[historyIndex].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet writes[5] = {};
+        writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, _volumetricCloudDescriptorSets[i], 0, 0, 1,
+                     VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &constants, nullptr};
+        for (std::uint32_t binding = 1; binding < 5; ++binding)
+            writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, _volumetricCloudDescriptorSets[i], binding,
+                               0, 1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &images[binding - 1], nullptr, nullptr};
+        vkUpdateDescriptorSets(_device, 5, writes, 0, nullptr);
+    }
 }
 
 bool EngineVK::CreateVolumetricCloudPipeline()
 {
-    if (_volumetricCloudPipeline)
+    const std::array<VkPipeline*, 4> cloudPipelines = {
+        &_volumetricCloudPipeline, &_cloudLightingPipeline, &_cloudTemporalPipeline, &_cloudCompositePipeline};
+    for (VkPipeline* pipeline : cloudPipelines)
     {
-        vkDestroyPipeline(_device, _volumetricCloudPipeline, nullptr);
-        _volumetricCloudPipeline = VK_NULL_HANDLE;
+        if (*pipeline)
+        {
+            vkDestroyPipeline(_device, *pipeline, nullptr);
+            *pipeline = VK_NULL_HANDLE;
+        }
     }
 
     std::vector<uint32_t> vertexSpirv;
@@ -2496,13 +2958,13 @@ bool EngineVK::CreateVolumetricCloudPipeline()
     inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkViewport viewport{};
-    viewport.y = static_cast<float>(_swapchainExtent.height);
-    viewport.width = static_cast<float>(_swapchainExtent.width);
-    viewport.height = -static_cast<float>(_swapchainExtent.height);
+    viewport.y = static_cast<float>(_cloudCurrent.height);
+    viewport.width = static_cast<float>(_cloudCurrent.width);
+    viewport.height = -static_cast<float>(_cloudCurrent.height);
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
     VkRect2D scissor{};
-    scissor.extent = _swapchainExtent;
+    scissor.extent = {_cloudCurrent.width, _cloudCurrent.height};
     VkPipelineViewportStateCreateInfo viewportState{};
     viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     viewportState.viewportCount = 1;
@@ -2516,7 +2978,7 @@ bool EngineVK::CreateVolumetricCloudPipeline()
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     VkPipelineDepthStencilStateCreateInfo depthStencil = vk::BuildDepthStencilState(render::DepthMode::Disabled);
     VkPipelineColorBlendAttachmentState colorBlendAttachment =
-        vk::BuildColorBlendAttachmentState(render::BlendMode::AlphaBlend);
+        vk::BuildColorBlendAttachmentState(render::BlendMode::Opaque);
     VkPipelineColorBlendStateCreateInfo colorBlending{};
     colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     colorBlending.attachmentCount = 1;
@@ -2533,8 +2995,7 @@ bool EngineVK::CreateVolumetricCloudPipeline()
     pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pColorBlendState = &colorBlending;
     pipelineInfo.layout = _volumetricCloudPipelineLayout;
-    pipelineInfo.renderPass = _renderPass;
-    pipelineInfo.subpass = 1;
+    pipelineInfo.renderPass = _cloudRaymarchRenderPass;
     const VkResult result =
         vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_volumetricCloudPipeline);
     vkDestroyShaderModule(_device, fragmentModule, nullptr);
@@ -2545,14 +3006,84 @@ bool EngineVK::CreateVolumetricCloudPipeline()
         return false;
     }
     SetObjectName(VK_OBJECT_TYPE_PIPELINE, VulkanObjectHandle(_volumetricCloudPipeline),
-                  "PoseidonVK Volumetric Cloud Pipeline");
-    LOG_INFO(Graphics, "Vulkan: volumetric cloud pipeline created");
+                  "PoseidonVK Cloud Raymarch Pipeline");
+
+    const auto createAdditionalPipeline = [&](const char* fragmentSource, VkRenderPass renderPass, VkPipeline& output,
+                                              bool composite)
+    {
+        std::vector<uint32_t> vs;
+        std::vector<uint32_t> fs;
+        std::string compileError;
+        if (!CompileBootstrapShader(kVolumetricCloudVertexShader, EShLangVertex, vs, compileError) ||
+            !CompileBootstrapShader(fragmentSource, EShLangFragment, fs, compileError))
+            return false;
+        VkShaderModule vm = VK_NULL_HANDLE;
+        VkShaderModule fm = VK_NULL_HANDLE;
+        if (!createShaderModule(vs, vm) || !createShaderModule(fs, fm))
+        {
+            if (vm) vkDestroyShaderModule(_device, vm, nullptr);
+            if (fm) vkDestroyShaderModule(_device, fm, nullptr);
+            return false;
+        }
+        VkPipelineShaderStageCreateInfo stages[2] = {};
+        stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[0].module = vm;
+        stages[0].pName = "main";
+        stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[1].module = fm;
+        stages[1].pName = "main";
+        VkViewport passViewport = viewport;
+        VkRect2D passScissor = scissor;
+        if (composite)
+        {
+            passViewport.y = static_cast<float>(_swapchainExtent.height);
+            passViewport.width = static_cast<float>(_swapchainExtent.width);
+            passViewport.height = -static_cast<float>(_swapchainExtent.height);
+            passScissor.extent = _swapchainExtent;
+        }
+        VkPipelineViewportStateCreateInfo passViewportState = viewportState;
+        passViewportState.pViewports = &passViewport;
+        passViewportState.pScissors = &passScissor;
+        VkPipelineColorBlendAttachmentState passBlend = colorBlendAttachment;
+        if (composite)
+        {
+            passBlend.blendEnable = VK_TRUE;
+            passBlend.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            passBlend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            passBlend.colorBlendOp = VK_BLEND_OP_ADD;
+            passBlend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            passBlend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+            passBlend.alphaBlendOp = VK_BLEND_OP_ADD;
+        }
+        VkPipelineColorBlendStateCreateInfo passColorBlend = colorBlending;
+        passColorBlend.pAttachments = &passBlend;
+        VkGraphicsPipelineCreateInfo info = pipelineInfo;
+        info.pStages = stages;
+        info.pViewportState = &passViewportState;
+        info.pColorBlendState = &passColorBlend;
+        info.renderPass = renderPass;
+        const VkResult pipelineResult = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &info, nullptr, &output);
+        vkDestroyShaderModule(_device, fm, nullptr);
+        vkDestroyShaderModule(_device, vm, nullptr);
+        return pipelineResult == VK_SUCCESS;
+    };
+    if (!createAdditionalPipeline(kCloudLightingFragmentShader, _cloudLightingRenderPass, _cloudLightingPipeline, false) ||
+        !createAdditionalPipeline(kCloudTemporalFragmentShader, _cloudTemporalRenderPass, _cloudTemporalPipeline, false) ||
+        !createAdditionalPipeline(kCloudCompositeFragmentShader, _cloudCompositeRenderPass, _cloudCompositePipeline, true))
+    {
+        LOG_ERROR(Graphics, "Vulkan: temporal cloud pass pipeline creation failed");
+        return false;
+    }
+    LOG_INFO(Graphics, "Vulkan: fixed-world cloud lighting, raymarch, temporal, and composite pipelines created");
     return true;
 }
 
 void EngineVK::DestroyVolumetricCloudDescriptorResources()
 {
     _volumetricCloudDescriptorSet = VK_NULL_HANDLE;
+    _volumetricCloudDescriptorSets = {};
     if (_device && _volumetricCloudDescriptorPool)
     {
         vkDestroyDescriptorPool(_device, _volumetricCloudDescriptorPool, nullptr);
@@ -2576,9 +3107,10 @@ void EngineVK::DestroyVolumetricCloudPipelineLayout()
 
 bool EngineVK::CreateWorldCompositeDescriptorLayout()
 {
-    const std::array<VkDescriptorSetLayoutBinding, 2> bindings = {{
+    const std::array<VkDescriptorSetLayoutBinding, 3> bindings = {{
         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     }};
     VkDescriptorSetLayoutCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
@@ -2604,7 +3136,8 @@ bool EngineVK::CreateWorldCompositePipelineLayout()
 bool EngineVK::CreateWorldCompositeDescriptorSet()
 {
     DestroyWorldCompositeDescriptorResources();
-    if (!_worldColorImageView || !_frameConstantsBuffer.buffer || !_worldCompositeDescriptorSetLayout)
+    if (!_worldColorImageView || !_frameConstantsBuffer.buffer || !_worldCompositeDescriptorSetLayout ||
+         (_temporalExposureEnabled && !_eyeAdaptationHistory[0].view))
         return false;
     VkSamplerCreateInfo samplerInfo{};
     samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -2618,7 +3151,7 @@ bool EngineVK::CreateWorldCompositeDescriptorSet()
     if (vkCreateSampler(_device, &samplerInfo, nullptr, &_worldCompositeSampler) != VK_SUCCESS)
         return false;
     const std::array<VkDescriptorPoolSize, 2> poolSizes = {{
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
     }};
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -2635,28 +3168,32 @@ bool EngineVK::CreateWorldCompositeDescriptorSet()
     allocation.pSetLayouts = &_worldCompositeDescriptorSetLayout;
     if (vkAllocateDescriptorSets(_device, &allocation, &_worldCompositeDescriptorSet) != VK_SUCCESS)
         return false;
-    VkDescriptorImageInfo imageInfo{};
-    imageInfo.sampler = _worldCompositeSampler;
-    imageInfo.imageView = _worldColorImageView;
-    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    UpdateWorldCompositeDescriptorSet(0);
+    return true;
+}
+
+void EngineVK::UpdateWorldCompositeDescriptorSet(std::uint32_t exposureHistoryIndex)
+{
+    if (!_worldCompositeDescriptorSet || exposureHistoryIndex >= _eyeAdaptationHistory.size())
+        return;
+    VkDescriptorImageInfo imageInfos[2]{};
+    imageInfos[0].sampler = _worldCompositeSampler;
+    imageInfos[0].imageView = _worldColorImageView;
+    imageInfos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfos[1].sampler = _worldCompositeSampler;
+    imageInfos[1].imageView = _temporalExposureEnabled ? _eyeAdaptationHistory[exposureHistoryIndex].view : _worldColorImageView;
+    imageInfos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkDescriptorBufferInfo frameInfo{};
     frameInfo.buffer = _frameConstantsBuffer.buffer;
     frameInfo.range = sizeof(vk::FrameConstantsVK);
-    std::array<VkWriteDescriptorSet, 2> writes{};
-    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[0].dstSet = _worldCompositeDescriptorSet;
-    writes[0].dstBinding = 0;
-    writes[0].descriptorCount = 1;
-    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writes[0].pImageInfo = &imageInfo;
-    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[1].dstSet = _worldCompositeDescriptorSet;
-    writes[1].dstBinding = 1;
-    writes[1].descriptorCount = 1;
-    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    writes[1].pBufferInfo = &frameInfo;
+    std::array<VkWriteDescriptorSet, 3> writes{};
+    writes[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, _worldCompositeDescriptorSet, 0, 0, 1,
+                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfos[0], nullptr, nullptr};
+    writes[1] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, _worldCompositeDescriptorSet, 1, 0, 1,
+                 VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, nullptr, &frameInfo, nullptr};
+    writes[2] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, _worldCompositeDescriptorSet, 2, 0, 1,
+                 VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, &imageInfos[1], nullptr, nullptr};
     vkUpdateDescriptorSets(_device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
-    return true;
 }
 
 void EngineVK::DestroyWorldCompositeDescriptorResources()
@@ -2678,6 +3215,180 @@ void EngineVK::DestroyWorldCompositePipelineLayout()
         vkDestroyDescriptorSetLayout(_device, _worldCompositeDescriptorSetLayout, nullptr);
     _worldCompositePipelineLayout = VK_NULL_HANDLE;
     _worldCompositeDescriptorSetLayout = VK_NULL_HANDLE;
+}
+
+bool EngineVK::CreateEyeAdaptationDescriptorLayout()
+{
+    const std::array<VkDescriptorSetLayoutBinding, 2> bindings = {{
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    }};
+    VkDescriptorSetLayoutCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    info.bindingCount = static_cast<uint32_t>(bindings.size());
+    info.pBindings = bindings.data();
+    return vkCreateDescriptorSetLayout(_device, &info, nullptr, &_eyeAdaptationDescriptorSetLayout) == VK_SUCCESS;
+}
+
+bool EngineVK::CreateEyeAdaptationDescriptorSet()
+{
+    DestroyEyeAdaptationDescriptorResources();
+    if (!_eyeAdaptationHistory[0].view || !_eyeAdaptationHistory[1].view || !_frameConstantsBuffer.buffer ||
+        !_eyeAdaptationDescriptorSetLayout)
+        return false;
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_NEAREST;
+    samplerInfo.minFilter = VK_FILTER_NEAREST;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.maxLod = 0.0f;
+    if (vkCreateSampler(_device, &samplerInfo, nullptr, &_eyeAdaptationSampler) != VK_SUCCESS)
+        return false;
+    const std::array<VkDescriptorPoolSize, 2> poolSizes = {{
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2},
+    }};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = static_cast<uint32_t>(_eyeAdaptationDescriptorSets.size());
+    poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+    poolInfo.pPoolSizes = poolSizes.data();
+    if (vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_eyeAdaptationDescriptorPool) != VK_SUCCESS)
+        return false;
+    VkDescriptorSetAllocateInfo allocation{};
+    allocation.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocation.descriptorPool = _eyeAdaptationDescriptorPool;
+    allocation.descriptorSetCount = static_cast<uint32_t>(_eyeAdaptationDescriptorSets.size());
+    std::array<VkDescriptorSetLayout, 2> layouts = {_eyeAdaptationDescriptorSetLayout, _eyeAdaptationDescriptorSetLayout};
+    allocation.pSetLayouts = layouts.data();
+    if (vkAllocateDescriptorSets(_device, &allocation, _eyeAdaptationDescriptorSets.data()) != VK_SUCCESS)
+        return false;
+    for (std::uint32_t writeIndex = 0; writeIndex < _eyeAdaptationDescriptorSets.size(); ++writeIndex)
+    {
+        VkDescriptorImageInfo historyInfo{};
+        historyInfo.sampler = _eyeAdaptationSampler;
+        historyInfo.imageView = _eyeAdaptationHistory[1 - writeIndex].view;
+        historyInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkDescriptorBufferInfo frameInfo{};
+        frameInfo.buffer = _frameConstantsBuffer.buffer;
+        frameInfo.range = sizeof(vk::FrameConstantsVK);
+        VkWriteDescriptorSet writes[2]{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = _eyeAdaptationDescriptorSets[writeIndex];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo = &historyInfo;
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = _eyeAdaptationDescriptorSets[writeIndex];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[1].pBufferInfo = &frameInfo;
+        vkUpdateDescriptorSets(_device, 2, writes, 0, nullptr);
+    }
+    return true;
+}
+
+bool EngineVK::CreateEyeAdaptationPipelineLayout()
+{
+    VkPushConstantRange pushConstants{};
+    pushConstants.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstants.size = sizeof(EyeAdaptationPushConstants);
+    VkPipelineLayoutCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    info.setLayoutCount = 1;
+    info.pSetLayouts = &_eyeAdaptationDescriptorSetLayout;
+    info.pushConstantRangeCount = 1;
+    info.pPushConstantRanges = &pushConstants;
+    return vkCreatePipelineLayout(_device, &info, nullptr, &_eyeAdaptationPipelineLayout) == VK_SUCCESS;
+}
+
+void EngineVK::DestroyEyeAdaptationDescriptorResources()
+{
+    _eyeAdaptationDescriptorSets = {};
+    if (_eyeAdaptationDescriptorPool)
+        vkDestroyDescriptorPool(_device, _eyeAdaptationDescriptorPool, nullptr);
+    if (_eyeAdaptationSampler)
+        vkDestroySampler(_device, _eyeAdaptationSampler, nullptr);
+    _eyeAdaptationDescriptorPool = VK_NULL_HANDLE;
+    _eyeAdaptationSampler = VK_NULL_HANDLE;
+}
+
+void EngineVK::DestroyEyeAdaptationPipelineLayout()
+{
+    if (_eyeAdaptationPipelineLayout)
+        vkDestroyPipelineLayout(_device, _eyeAdaptationPipelineLayout, nullptr);
+    if (_eyeAdaptationDescriptorSetLayout)
+        vkDestroyDescriptorSetLayout(_device, _eyeAdaptationDescriptorSetLayout, nullptr);
+    _eyeAdaptationPipelineLayout = VK_NULL_HANDLE;
+    _eyeAdaptationDescriptorSetLayout = VK_NULL_HANDLE;
+}
+
+bool EngineVK::CreateEyeAdaptationPipeline()
+{
+    if (_eyeAdaptationPipeline)
+        vkDestroyPipeline(_device, _eyeAdaptationPipeline, nullptr);
+    _eyeAdaptationPipeline = VK_NULL_HANDLE;
+    std::vector<uint32_t> vertexSpirv;
+    std::vector<uint32_t> fragmentSpirv;
+    std::string error;
+    if (!CompileBootstrapShader(kWorldCompositeVertexShader, EShLangVertex, vertexSpirv, error) ||
+        !CompileBootstrapShader(kEyeAdaptationFragmentShader, EShLangFragment, fragmentSpirv, error))
+        return false;
+    auto createModule = [&](const std::vector<uint32_t>& spirv, VkShaderModule& module)
+    {
+        VkShaderModuleCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        info.codeSize = spirv.size() * sizeof(uint32_t);
+        info.pCode = spirv.data();
+        return vkCreateShaderModule(_device, &info, nullptr, &module) == VK_SUCCESS;
+    };
+    VkShaderModule vertexModule = VK_NULL_HANDLE;
+    VkShaderModule fragmentModule = VK_NULL_HANDLE;
+    if (!createModule(vertexSpirv, vertexModule) || !createModule(fragmentSpirv, fragmentModule))
+        return false;
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertexModule, "main"};
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragmentModule, "main"};
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkViewport viewport{0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+    VkRect2D scissor{{0, 0}, {1, 1}};
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+    VkPipelineRasterizationStateCreateInfo rasterizer =
+        vk::BuildRasterizationState(render::CullMode::None, render::FrontFaceMode::CW);
+    VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineDepthStencilStateCreateInfo depth = vk::BuildDepthStencilState(render::DepthMode::Disabled);
+    VkPipelineColorBlendAttachmentState blend = vk::BuildColorBlendAttachmentState(render::BlendMode::Opaque);
+    VkPipelineColorBlendStateCreateInfo blending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blending.attachmentCount = 1;
+    blending.pAttachments = &blend;
+    VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    info.stageCount = 2;
+    info.pStages = stages;
+    info.pVertexInputState = &vertexInput;
+    info.pInputAssemblyState = &assembly;
+    info.pViewportState = &viewportState;
+    info.pRasterizationState = &rasterizer;
+    info.pMultisampleState = &multisampling;
+    info.pDepthStencilState = &depth;
+    info.pColorBlendState = &blending;
+    info.layout = _eyeAdaptationPipelineLayout;
+    info.renderPass = _eyeAdaptationRenderPass;
+    const VkResult result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &info, nullptr, &_eyeAdaptationPipeline);
+    vkDestroyShaderModule(_device, fragmentModule, nullptr);
+    vkDestroyShaderModule(_device, vertexModule, nullptr);
+    return result == VK_SUCCESS;
 }
 
 bool EngineVK::CreateWorldCompositePipeline()
@@ -3162,6 +3873,15 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
 
     VkCommandBuffer commandBuffer = _commandBuffers[imageIndex];
     vkResetCommandBuffer(commandBuffer, 0);
+    _eyeAdaptationPendingWrite = false;
+    const bool recordEyeAdaptation = _hdrEnabled && _hasFrameConstants && _eyeAdaptationPipeline &&
+                                     _eyeAdaptationPipelineLayout && _eyeAdaptationDescriptorSets[0] &&
+                                     _eyeAdaptationRenderPass;
+    const std::uint32_t exposureHistoryIndex = recordEyeAdaptation
+                                                   ? (_eyeAdaptationHistoryValid ? 1 - _eyeAdaptationCurrentIndex : 0)
+                                                   : _eyeAdaptationCurrentIndex;
+    if (WorldCompositionActive())
+        UpdateWorldCompositeDescriptorSet(exposureHistoryIndex);
 
     VkCommandBufferBeginInfo beginInfo{};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -3468,27 +4188,83 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         recordSceneDraws(SceneGroup::Other);
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 4);
+        // End the world pass before sampling its depth. The former cloud
+        // subpass was a full-resolution input-attachment prototype; cloud work
+        // now owns explicit low-resolution attachments and history barriers.
+        vkCmdEndRenderPass(commandBuffer);
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 5);
-        vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
-        if (_volumetricCloudsEnabled && _volumetricCloudPipeline && _volumetricCloudDescriptorSet && _hasFrameConstants)
+        if (_volumetricCloudsEnabled && _volumetricCloudPipeline && _cloudLightingPipeline && _cloudTemporalPipeline &&
+            _cloudCompositePipeline && _volumetricCloudDescriptorSets[0] && _hasFrameConstants)
         {
-            BeginDebugLabel(commandBuffer, "PoseidonVK Volumetric Clouds", 0.85f, 0.85f, 0.95f);
-            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _volumetricCloudPipeline);
-            VkDescriptorSet cloudSets[] = {_frameDescriptorSet, _volumetricCloudDescriptorSet};
-            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _volumetricCloudPipelineLayout, 0, 2,
-                                    cloudSets, 0, nullptr);
-            vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+            BeginDebugLabel(commandBuffer, "PoseidonVK Temporal Volumetric Clouds", 0.85f, 0.85f, 0.95f);
+            const std::uint32_t historyRead = _cloudHistoryCurrentIndex;
+            const std::uint32_t historyWrite = 1 - historyRead;
+            UpdateCloudDescriptorSets(historyRead);
+            const auto recordCloudPass = [&](VkRenderPass pass, VkFramebuffer framebuffer, VkExtent2D extent,
+                                             VkPipeline pipeline, VkDescriptorSet cloudSet)
+            {
+                VkRenderPassBeginInfo passInfo{};
+                passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+                passInfo.renderPass = pass;
+                passInfo.framebuffer = framebuffer;
+                passInfo.renderArea.extent = extent;
+                vkCmdBeginRenderPass(commandBuffer, &passInfo, VK_SUBPASS_CONTENTS_INLINE);
+                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                VkDescriptorSet sets[] = {_frameDescriptorSet, cloudSet};
+                vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _volumetricCloudPipelineLayout,
+                                        0, 2, sets, 0, nullptr);
+                vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+                vkCmdEndRenderPass(commandBuffer);
+            };
+            const VkExtent2D cloudExtent{_cloudCurrent.width, _cloudCurrent.height};
+            recordCloudPass(_cloudLightingRenderPass, _cloudLightingFramebuffer, cloudExtent, _cloudLightingPipeline,
+                            _volumetricCloudDescriptorSets[0]);
+            recordCloudPass(_cloudRaymarchRenderPass, _cloudRaymarchFramebuffer, cloudExtent, _volumetricCloudPipeline,
+                            _volumetricCloudDescriptorSets[0]);
+            recordCloudPass(_cloudTemporalRenderPass, _cloudTemporalFramebuffers[historyWrite], cloudExtent,
+                            _cloudTemporalPipeline, _volumetricCloudDescriptorSets[0]);
+            recordCloudPass(_cloudCompositeRenderPass, _cloudCompositeFramebuffer, _swapchainExtent,
+                            _cloudCompositePipeline, _volumetricCloudDescriptorSets[1]);
+            _cloudHistoryCurrentIndex = historyWrite;
+            _cloudHistoryValid = true;
             EndDebugLabel(commandBuffer);
         }
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 6);
-        vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
+        renderPassInfo.renderPass = _worldLateRenderPass;
+        renderPassInfo.framebuffer = _worldLateFramebuffer;
+        renderPassInfo.clearValueCount = 0;
+        renderPassInfo.pClearValues = nullptr;
+        vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
         recordSceneDraws(SceneGroup::WorldLate);
         vkCmdEndRenderPass(commandBuffer);
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 7);
         EndDebugLabel(commandBuffer);
+
+        if (recordEyeAdaptation)
+        {
+            // The 1x1 pass runs after world rendering and before legacy UI presentation.
+            BeginDebugLabel(commandBuffer, "PoseidonVK Eye Adaptation", 0.85f, 0.55f, 0.15f);
+            VkRenderPassBeginInfo adaptationPassInfo{};
+            adaptationPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+            adaptationPassInfo.renderPass = _eyeAdaptationRenderPass;
+            adaptationPassInfo.framebuffer = _eyeAdaptationFramebuffers[exposureHistoryIndex];
+            adaptationPassInfo.renderArea.extent = {1, 1};
+            vkCmdBeginRenderPass(commandBuffer, &adaptationPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _eyeAdaptationPipeline);
+            vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _eyeAdaptationPipelineLayout, 0, 1,
+                                    &_eyeAdaptationDescriptorSets[exposureHistoryIndex], 0, nullptr);
+            const EyeAdaptationPushConstants constants{_hdrExposure, _eyeAdaptationHistoryValid ? 1u : 0u};
+            vkCmdPushConstants(commandBuffer, _eyeAdaptationPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               sizeof(constants), &constants);
+            vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+            vkCmdEndRenderPass(commandBuffer);
+            EndDebugLabel(commandBuffer);
+            _eyeAdaptationPendingWrite = true;
+            _eyeAdaptationPendingIndex = exposureHistoryIndex;
+        }
 
         // Keep briefing/control objects and HUD out of the world target. They are
         // display-referred legacy UI, often depth-disabled, and must be drawn only
@@ -3496,6 +4272,8 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         BeginDebugLabel(commandBuffer, "PoseidonVK Present Render Pass", 0.18f, 0.65f, 0.42f);
         renderPassInfo.renderPass = _presentRenderPass;
         renderPassInfo.framebuffer = _framebuffers[imageIndex];
+        renderPassInfo.clearValueCount = 2;
+        renderPassInfo.pClearValues = clearValues;
         vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, _gpuTimingQueryPool, 8);
@@ -3504,7 +4282,8 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _worldCompositePipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _worldCompositePipelineLayout, 0,
                                     1, &_worldCompositeDescriptorSet, 0, nullptr);
-            const WorldCompositePushConstants constants{_hdrExposure, _hdrEnabled ? 1u : 0u};
+            const WorldCompositePushConstants constants{_hdrExposure, _hdrEnabled ? 1u : 0u,
+                                                         recordEyeAdaptation || _eyeAdaptationHistoryValid ? 1u : 0u};
             vkCmdPushConstants(commandBuffer, _worldCompositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                sizeof(constants), &constants);
             vkCmdDraw(commandBuffer, 3, 1, 0, 0);
@@ -3547,13 +4326,34 @@ void EngineVK::DestroySwapchain()
         vkDestroyPipeline(_device, _volumetricCloudPipeline, nullptr);
         _volumetricCloudPipeline = VK_NULL_HANDLE;
     }
+    if (_cloudLightingPipeline)
+    {
+        vkDestroyPipeline(_device, _cloudLightingPipeline, nullptr);
+        _cloudLightingPipeline = VK_NULL_HANDLE;
+    }
+    if (_cloudTemporalPipeline)
+    {
+        vkDestroyPipeline(_device, _cloudTemporalPipeline, nullptr);
+        _cloudTemporalPipeline = VK_NULL_HANDLE;
+    }
+    if (_cloudCompositePipeline)
+    {
+        vkDestroyPipeline(_device, _cloudCompositePipeline, nullptr);
+        _cloudCompositePipeline = VK_NULL_HANDLE;
+    }
     if (_worldCompositePipeline)
     {
         vkDestroyPipeline(_device, _worldCompositePipeline, nullptr);
         _worldCompositePipeline = VK_NULL_HANDLE;
     }
+    if (_eyeAdaptationPipeline)
+    {
+        vkDestroyPipeline(_device, _eyeAdaptationPipeline, nullptr);
+        _eyeAdaptationPipeline = VK_NULL_HANDLE;
+    }
     DestroyVolumetricCloudDescriptorResources();
     DestroyWorldCompositeDescriptorResources();
+    DestroyEyeAdaptationDescriptorResources();
 
     if (_scenePipeline)
     {
@@ -3593,7 +4393,9 @@ void EngineVK::DestroySwapchain()
     }
     _framebuffers.clear();
 
+    DestroyCloudResources();
     DestroyWorldTarget();
+    DestroyEyeAdaptationResources();
 
     if (_presentRenderPass)
     {
@@ -3642,6 +4444,11 @@ void EngineVK::DestroySwapchain()
 void EngineVK::DestroyFrameConstantsBuffer()
 {
     vk::DestroyBuffer(_device, _frameConstantsBuffer);
+}
+
+void EngineVK::DestroyCloudConstantsBuffer()
+{
+    vk::DestroyBuffer(_device, _cloudConstantsBuffer);
 }
 
 void EngineVK::DestroyDrawConstantsBuffer()
@@ -3765,11 +4572,13 @@ bool EngineVK::RecreateSwapchain()
     vkDeviceWaitIdle(_device);
     DestroySwapchain();
     const bool recreated = CreateSwapchain() &&
-                           (!_volumetricCloudsEnabled || CreateVolumetricCloudDescriptorSet()) &&
-                           (!WorldCompositionActive() || CreateWorldCompositeDescriptorSet()) &&
-                           CreateBootstrapPipeline() && CreateScenePipeline() && CreateProceduralSkyPipeline() &&
-                           (!_volumetricCloudsEnabled || CreateVolumetricCloudPipeline()) &&
-                           (!WorldCompositionActive() || CreateWorldCompositePipeline()) && CreateScreenPipeline() &&
+                            (!_volumetricCloudsEnabled || CreateVolumetricCloudDescriptorSet()) &&
+                            (!_temporalExposureEnabled || CreateEyeAdaptationDescriptorSet()) &&
+                            (!WorldCompositionActive() || CreateWorldCompositeDescriptorSet()) &&
+                            CreateBootstrapPipeline() && CreateScenePipeline() && CreateProceduralSkyPipeline() &&
+                            (!_volumetricCloudsEnabled || CreateVolumetricCloudPipeline()) &&
+                            (!_temporalExposureEnabled || CreateEyeAdaptationPipeline()) &&
+                            (!WorldCompositionActive() || CreateWorldCompositePipeline()) && CreateScreenPipeline() &&
                            CreateSyncObjects();
     _swapchainDirty = !recreated;
     return recreated;
@@ -3829,6 +4638,12 @@ void EngineVK::PresentBootstrapFrame()
         LOG_ERROR(Graphics, "Vulkan: vkQueueSubmit failed: {}", VkResultName(result));
         RecreateSignaledFence(_device, _inFlight);
         return;
+    }
+    if (_eyeAdaptationPendingWrite)
+    {
+        _eyeAdaptationCurrentIndex = _eyeAdaptationPendingIndex;
+        _eyeAdaptationHistoryValid = true;
+        _eyeAdaptationPendingWrite = false;
     }
     _gpuTimingPending = _gpuTimingQueryPool != VK_NULL_HANDLE && WorldCompositionActive();
     VkPresentInfoKHR presentInfo{};
@@ -3892,10 +4707,12 @@ void EngineVK::Shutdown()
         }
         DestroyVolumetricCloudPipelineLayout();
         DestroyWorldCompositePipelineLayout();
+        DestroyEyeAdaptationPipelineLayout();
         DestroyScenePipelineLayout();
         DestroyFrameDescriptorResources();
         DestroyTextureDescriptorResources();
         DestroyFrameConstantsBuffer();
+        DestroyCloudConstantsBuffer();
         DestroyDrawConstantsBuffer();
         DestroyBootstrapVertexBuffer();
         DestroyBootstrapIndexBuffer();

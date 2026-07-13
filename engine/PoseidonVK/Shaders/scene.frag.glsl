@@ -35,6 +35,9 @@ layout(set = 0, binding = 0, std140) uniform FrameConstants
     vec4 camPos;
     vec4 specularColor;
     vec4 specularCtrl;
+    vec4 cloudOrigin;
+    vec4 wind;
+    vec4 windOffset;
 } frame;
 
 struct DrawConstants
@@ -84,6 +87,49 @@ const uint kPassTerrainOpaque = 12u;
 const uint kLightingLit         = 0u;
 const uint kLightingSunDisabled = 1u;
 const uint kFogEnabled          = 0u;
+
+float CloudHash(vec3 p)
+{
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+
+float CloudNoise(vec3 p)
+{
+    vec3 cell = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float n000 = CloudHash(cell);
+    float n100 = CloudHash(cell + vec3(1.0, 0.0, 0.0));
+    float n010 = CloudHash(cell + vec3(0.0, 1.0, 0.0));
+    float n110 = CloudHash(cell + vec3(1.0, 1.0, 0.0));
+    float n001 = CloudHash(cell + vec3(0.0, 0.0, 1.0));
+    float n101 = CloudHash(cell + vec3(1.0, 0.0, 1.0));
+    float n011 = CloudHash(cell + vec3(0.0, 1.0, 1.0));
+    float n111 = CloudHash(cell + vec3(1.0, 1.0, 1.0));
+    return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+               mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+
+float CloudShadow(vec3 cameraRelativePosition)
+{
+    vec3 toSun = normalize(-frame.sunDirection.xyz);
+    if (toSun.y <= 0.02)
+        return 1.0;
+    vec3 worldPosition = cameraRelativePosition;
+    vec2 volumeCentre = (floor(frame.cloudOrigin.xz / 16384.0) + 0.5) * 16384.0;
+    if (max(abs(worldPosition.x - volumeCentre.x), abs(worldPosition.z - volumeCentre.y)) > 8192.0)
+        return 1.0;
+    float travel = max(0.0, (4000.0 - worldPosition.y) / toSun.y);
+    // The cloud volume is evaluated in absolute world space. windOffset is
+    // accumulated on the CPU, so a weather-direction change does not reset or
+    // phase-jump terrain shadows as it would with velocity * absolute time.
+    vec3 p = (worldPosition + toSun * travel - frame.windOffset.xyz) * 0.00023;
+    float shape = CloudNoise(p) * 0.55 + CloudNoise(p * 2.07 + 19.7) * 0.30 + CloudNoise(p * 4.13 - 7.1) * 0.15;
+    float cover = smoothstep(0.52, 0.72, shape);
+    return mix(1.0, 0.72, cover);
+}
 
 void main()
 {
@@ -172,6 +218,12 @@ void main()
             {
                 light += localAmb * atten;
             }
+        }
+        if (pass == kPassTerrainOpaque && sunOn > 0.0)
+        {
+            // Apply the same fixed-world field used by the cloud passes after
+            // local-light accumulation, preserving readable terrain ambient.
+            light = max(light * CloudShadow(vWorldPos), vec3(0.16));
         }
         light = clamp(light, 0.0f, 1.0f);
     }
@@ -335,6 +387,7 @@ void main()
         float nightBlend = clamp(luminance + (1.0 - frame.lightingParams.w), 0.0, 1.0);
         baseColor = mix(vec3(luminance), baseColor, nightBlend);
     }
+
 
     // -----------------------------------------------------------------------
     // Fog: vFogFactor=1 near (no fog), 0 far (full fog).

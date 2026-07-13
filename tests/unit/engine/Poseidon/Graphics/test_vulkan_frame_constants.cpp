@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <PoseidonVK/BufferVK.hpp>
+#include <PoseidonVK/CloudConstantsVK.hpp>
 #include <PoseidonVK/DrawConstantsVK.hpp>
 #include <PoseidonVK/FrameConstantsVK.hpp>
 #include <Poseidon/Graphics/Rendering/Frame/BuildFrame.hpp>
@@ -97,7 +98,25 @@ TEST_CASE("Vulkan frame constants match std140 descriptor layout", "[vulkan][fra
     STATIC_REQUIRE(offsetof(FrameConstantsVK, camPos) == 1168);
     STATIC_REQUIRE(offsetof(FrameConstantsVK, specularColor) == 1184);
     STATIC_REQUIRE(offsetof(FrameConstantsVK, specularCtrl) == 1200);
-    STATIC_REQUIRE(sizeof(FrameConstantsVK) == 1216);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, cloudOrigin) == 1216);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, wind) == 1232);
+    STATIC_REQUIRE(offsetof(FrameConstantsVK, windOffset) == 1248);
+    STATIC_REQUIRE(sizeof(FrameConstantsVK) == 1264);
+}
+
+TEST_CASE("Vulkan temporal cloud constants have a stable uniform layout", "[vulkan][clouds]")
+{
+    using Poseidon::vk::CloudConstantsVK;
+
+    STATIC_REQUIRE(offsetof(CloudConstantsVK, previousView) == 0);
+    STATIC_REQUIRE(offsetof(CloudConstantsVK, previousProjection) == 64);
+    STATIC_REQUIRE(offsetof(CloudConstantsVK, cameraPosition) == 128);
+    STATIC_REQUIRE(offsetof(CloudConstantsVK, previousCameraPosition) == 144);
+    STATIC_REQUIRE(offsetof(CloudConstantsVK, windOffset) == 160);
+    STATIC_REQUIRE(offsetof(CloudConstantsVK, previousWindOffset) == 176);
+    STATIC_REQUIRE(offsetof(CloudConstantsVK, volumeOrigin) == 192);
+    STATIC_REQUIRE(offsetof(CloudConstantsVK, renderSizeAndHistory) == 208);
+    STATIC_REQUIRE(sizeof(CloudConstantsVK) == 224);
 }
 
 TEST_CASE("Vulkan mapped buffer upload copies frame constants bytes", "[vulkan][frame-constants]")

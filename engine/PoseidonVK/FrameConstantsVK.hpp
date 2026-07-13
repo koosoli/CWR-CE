@@ -36,6 +36,9 @@ struct FrameConstantsVK
     float camPos[4] = {};  // world-space camera position
     float specularColor[4] = {};  // RGB + power.w
     float specularCtrl[4] = {};   // x = enabled
+    float cloudOrigin[4] = {};    // absolute world-space camera position
+    float wind[4] = {};           // effective world-space weather velocity
+    float windOffset[4] = {};     // accumulated world-space weather displacement
 };
 
 static_assert(sizeof(GfxMatrix) == 64);
@@ -61,9 +64,12 @@ static_assert(offsetof(FrameConstantsVK, cascadeSplits) == 1120);
 static_assert(offsetof(FrameConstantsVK, cascadeCtl) == 1136);
 static_assert(offsetof(FrameConstantsVK, camFwd) == 1152);
 static_assert(offsetof(FrameConstantsVK, camPos) == 1168);
-static_assert(offsetof(FrameConstantsVK, specularColor) == 1184);
-static_assert(offsetof(FrameConstantsVK, specularCtrl) == 1200);
-static_assert(sizeof(FrameConstantsVK) == 1216);
+    static_assert(offsetof(FrameConstantsVK, specularColor) == 1184);
+    static_assert(offsetof(FrameConstantsVK, specularCtrl) == 1200);
+    static_assert(offsetof(FrameConstantsVK, cloudOrigin) == 1216);
+    static_assert(offsetof(FrameConstantsVK, wind) == 1232);
+    static_assert(offsetof(FrameConstantsVK, windOffset) == 1248);
+    static_assert(sizeof(FrameConstantsVK) == 1264);
 
 inline float ChannelToFloat(std::uint32_t value) noexcept
 {
@@ -153,6 +159,12 @@ inline FrameConstantsVK BuildFrameConstants(const render::frame::Frame& frame) n
     constants.specularColor[2] = 0.8f;
     constants.specularColor[3] = 32.0f;
     constants.specularCtrl[0] = 1.0f;
+    constants.cloudOrigin[0] = frame.cameraPosition[0];
+    constants.cloudOrigin[1] = frame.cameraPosition[1];
+    constants.cloudOrigin[2] = frame.cameraPosition[2];
+    constants.wind[0] = frame.wind[0];
+    constants.wind[1] = frame.wind[1];
+    constants.wind[2] = frame.wind[2];
 
     return constants;
 }

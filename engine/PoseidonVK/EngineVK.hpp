@@ -1,6 +1,7 @@
 #pragma once
 
 #include <PoseidonVK/BufferVK.hpp>
+#include <PoseidonVK/CloudConstantsVK.hpp>
 #include <PoseidonVK/DrawConstantsVK.hpp>
 #include <PoseidonVK/FrameConstantsVK.hpp>
 #include <PoseidonVK/MeshRegistryVK.hpp>
@@ -118,6 +119,7 @@ class EngineVK : public EngineDummy
     bool PickPhysicalDevice();
     bool CreateDevice();
     bool CreateFrameConstantsBuffer();
+    bool CreateCloudConstantsBuffer();
     bool CreateBootstrapVertexBuffer();
     bool CreateBootstrapIndexBuffer();
     bool CreateSceneVertexBuffer();
@@ -133,8 +135,17 @@ class EngineVK : public EngineDummy
     bool CreateWorldTarget();
     bool CreateWorldCompositeDescriptorLayout();
     bool CreateWorldCompositeDescriptorSet();
+    void UpdateWorldCompositeDescriptorSet(std::uint32_t exposureHistoryIndex);
     bool CreateWorldCompositePipelineLayout();
     bool CreateWorldCompositePipeline();
+    bool CreateEyeAdaptationResources();
+    void DestroyEyeAdaptationResources();
+    bool CreateEyeAdaptationDescriptorLayout();
+    bool CreateEyeAdaptationDescriptorSet();
+    bool CreateEyeAdaptationPipelineLayout();
+    bool CreateEyeAdaptationPipeline();
+    void DestroyEyeAdaptationDescriptorResources();
+    void DestroyEyeAdaptationPipelineLayout();
     bool CreateGpuTimingResources();
     void DestroyGpuTimingResources();
     void LogGpuTimings();
@@ -147,6 +158,10 @@ class EngineVK : public EngineDummy
     bool CreateVolumetricCloudDescriptorSet();
     bool CreateVolumetricCloudPipelineLayout();
     bool CreateVolumetricCloudPipeline();
+    bool CreateCloudResources();
+    void DestroyCloudResources();
+    void UpdateCloudDescriptorSets(std::uint32_t historyReadIndex);
+    void UpdateCloudConstants();
     void DestroyVolumetricCloudDescriptorResources();
     void DestroyVolumetricCloudPipelineLayout();
     bool CreateScreenPipeline();
@@ -175,6 +190,7 @@ class EngineVK : public EngineDummy
     VkPipeline GetOrCreateScenePipeline(const render::RenderPassDescriptor& desc);
     void DestroyFrameDescriptorResources();
     void DestroyFrameConstantsBuffer();
+    void DestroyCloudConstantsBuffer();
     void DestroyDrawConstantsBuffer();
     void DestroyBootstrapVertexBuffer();
     void DestroyBootstrapIndexBuffer();
@@ -208,6 +224,7 @@ class EngineVK : public EngineDummy
     VkQueue _graphicsQueue = VK_NULL_HANDLE;
     VkQueue _presentQueue = VK_NULL_HANDLE;
     vk::BufferVK _frameConstantsBuffer;
+    vk::BufferVK _cloudConstantsBuffer;
     vk::BufferVK _drawConstantsBuffer;
     vk::BufferVK _bootstrapVertexBuffer;
     vk::BufferVK _bootstrapIndexBuffer;
@@ -224,7 +241,11 @@ class EngineVK : public EngineDummy
     VkPipeline _scenePipeline = VK_NULL_HANDLE;
     VkPipeline _proceduralSkyPipeline = VK_NULL_HANDLE;
     VkPipeline _volumetricCloudPipeline = VK_NULL_HANDLE;
+    VkPipeline _cloudLightingPipeline = VK_NULL_HANDLE;
+    VkPipeline _cloudTemporalPipeline = VK_NULL_HANDLE;
+    VkPipeline _cloudCompositePipeline = VK_NULL_HANDLE;
     VkPipeline _worldCompositePipeline = VK_NULL_HANDLE;
+    VkPipeline _eyeAdaptationPipeline = VK_NULL_HANDLE;
     // Scene shader modules kept alive for pipeline cache variant creation.
     VkShaderModule _sceneVertexModule = VK_NULL_HANDLE;
     VkShaderModule _sceneFragmentModule = VK_NULL_HANDLE;
@@ -243,12 +264,18 @@ class EngineVK : public EngineDummy
     VkDescriptorSetLayout _volumetricCloudDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool _volumetricCloudDescriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet _volumetricCloudDescriptorSet = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 2> _volumetricCloudDescriptorSets = {};
     VkPipelineLayout _volumetricCloudPipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout _worldCompositeDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool _worldCompositeDescriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet _worldCompositeDescriptorSet = VK_NULL_HANDLE;
     VkPipelineLayout _worldCompositePipelineLayout = VK_NULL_HANDLE;
     VkSampler _worldCompositeSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout _eyeAdaptationDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool _eyeAdaptationDescriptorPool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 2> _eyeAdaptationDescriptorSets = {};
+    VkPipelineLayout _eyeAdaptationPipelineLayout = VK_NULL_HANDLE;
+    VkSampler _eyeAdaptationSampler = VK_NULL_HANDLE;
     VkShaderModule _screenVertexModule = VK_NULL_HANDLE;
     VkShaderModule _screenFragmentModule = VK_NULL_HANDLE;
     vk::BufferVK _screenVertexBuffer;
@@ -263,6 +290,11 @@ class EngineVK : public EngineDummy
     VkDeviceMemory _depthImageMemory = VK_NULL_HANDLE;
     VkImageView _depthImageView = VK_NULL_HANDLE;
     VkRenderPass _renderPass = VK_NULL_HANDLE;
+    VkRenderPass _worldLateRenderPass = VK_NULL_HANDLE;
+    VkRenderPass _cloudLightingRenderPass = VK_NULL_HANDLE;
+    VkRenderPass _cloudRaymarchRenderPass = VK_NULL_HANDLE;
+    VkRenderPass _cloudTemporalRenderPass = VK_NULL_HANDLE;
+    VkRenderPass _cloudCompositeRenderPass = VK_NULL_HANDLE;
     VkRenderPass _presentRenderPass = VK_NULL_HANDLE;
     VkImage _worldColorImage = VK_NULL_HANDLE;
     VkDeviceMemory _worldColorImageMemory = VK_NULL_HANDLE;
@@ -271,6 +303,18 @@ class EngineVK : public EngineDummy
     VkDeviceMemory _worldDepthImageMemory = VK_NULL_HANDLE;
     VkImageView _worldDepthImageView = VK_NULL_HANDLE;
     VkFramebuffer _worldFramebuffer = VK_NULL_HANDLE;
+    VkFramebuffer _worldLateFramebuffer = VK_NULL_HANDLE;
+    VkFramebuffer _cloudLightingFramebuffer = VK_NULL_HANDLE;
+    VkFramebuffer _cloudRaymarchFramebuffer = VK_NULL_HANDLE;
+    std::array<VkFramebuffer, 2> _cloudTemporalFramebuffers = {};
+    VkFramebuffer _cloudCompositeFramebuffer = VK_NULL_HANDLE;
+    vk::ImageVK _cloudLighting;
+    vk::ImageVK _cloudCurrent;
+    std::array<vk::ImageVK, 2> _cloudHistory = {};
+    VkSampler _cloudSampler = VK_NULL_HANDLE;
+    VkRenderPass _eyeAdaptationRenderPass = VK_NULL_HANDLE;
+    std::array<vk::ImageVK, 2> _eyeAdaptationHistory = {};
+    std::array<VkFramebuffer, 2> _eyeAdaptationFramebuffers = {};
     VkCommandPool _commandPool = VK_NULL_HANDLE;
     std::vector<VkImage> _swapchainImages;
     std::vector<VkImageView> _swapchainImageViews;
@@ -293,8 +337,19 @@ class EngineVK : public EngineDummy
     bool _debugUtilsEnabled = false;
     bool _proceduralSkyEnabled = false;
     bool _volumetricCloudsEnabled = false;
+    bool _cloudHistoryValid = false;
     bool _hdrEnabled = false;
+    bool _temporalExposureEnabled = false;
     float _hdrExposure = 1.0f;
+    bool _eyeAdaptationHistoryValid = false;
+    bool _eyeAdaptationPendingWrite = false;
+    std::uint32_t _eyeAdaptationCurrentIndex = 0;
+    std::uint32_t _cloudHistoryCurrentIndex = 0;
+    std::uint32_t _cloudFrameIndex = 0;
+    float _cloudLastUpdateSeconds = -1.0f;
+    vk::CloudConstantsVK _cloudConstants = {};
+    vk::FrameConstantsVK _previousCloudFrameConstants = {};
+    std::uint32_t _eyeAdaptationPendingIndex = 0;
     float _timestampPeriodNs = 0.0f;
     bool _gpuTimingPending = false;
     std::uint32_t _gpuTimingFrameCount = 0;

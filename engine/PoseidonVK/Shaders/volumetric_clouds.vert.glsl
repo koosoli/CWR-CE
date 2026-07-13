@@ -16,11 +16,13 @@ layout(set = 0, binding = 0, std140) uniform FrameConstants
 
 layout(location = 0) out vec3 vWorldRay;
 layout(location = 1) out vec2 vNdc;
+layout(location = 2) out vec2 vUv;
 
 void main()
 {
     const vec2 positions[3] = vec2[](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
     vNdc = positions[gl_VertexIndex];
+    vUv = vNdc * 0.5 + 0.5;
     gl_Position = vec4(vNdc, 0.0, 1.0);
 
     vec4 viewRay = inverse(frame.projection) * vec4(vNdc, 0.0, 1.0);

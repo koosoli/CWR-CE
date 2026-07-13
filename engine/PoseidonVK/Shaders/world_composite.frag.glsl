@@ -1,6 +1,7 @@
 #version 450
 
 layout(set = 0, binding = 0) uniform sampler2D worldColor;
+layout(set = 0, binding = 2) uniform sampler2D exposureHistory;
 
 layout(set = 0, binding = 1, std140) uniform FrameConstants
 {
@@ -20,6 +21,7 @@ layout(push_constant) uniform WorldCompositeParams
 {
     float exposure;
     uint hdrEnabled;
+    uint exposureHistoryValid;
 } composite;
 
 layout(location = 0) in vec2 vUv;
@@ -41,13 +43,15 @@ void main()
     vec3 scene = pow(max(world.rgb, vec3(0.0)), vec3(1.5));
 
     vec2 texel = 1.0 / vec2(textureSize(worldColor, 0));
-    // Meter the angular distance from the view centre to the analytic sun,
-    // rather than one unstable scene pixel. The centre ray is calculated once
-    // per full-screen-triangle vertex, not once per output pixel.
-    vec3 sunRay = normalize(-frame.sunDirection.xyz);
-    float sunInView = smoothstep(0.94, 0.9985, dot(vCentreWorldRay, sunRay));
-
-    float eyeExposure = mix(composite.exposure, composite.exposure * 0.30, sunInView);
+    float eyeExposure = composite.exposure;
+    if (composite.exposureHistoryValid != 0u)
+        eyeExposure = texture(exposureHistory, vec2(0.5)).r;
+    else
+    {
+        vec3 sunRay = normalize(-frame.sunDirection.xyz);
+        float sunInView = smoothstep(0.94, 0.9985, dot(vCentreWorldRay, sunRay));
+        eyeExposure = mix(composite.exposure, composite.exposure * 0.30, sunInView);
+    }
 
     // Fused bright-pass bloom. Two wider rings make the HDR sun radiance
     // visibly bleed beyond its disc without another intermediate texture.

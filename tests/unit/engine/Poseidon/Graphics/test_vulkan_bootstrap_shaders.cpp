@@ -7,6 +7,7 @@
 #include <glslang/SPIRV/GlslangToSpv.h>
 
 #include <cstddef>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -134,6 +135,40 @@ TEST_CASE("Vulkan world-composite shaders compile under Vulkan GLSL rules", "[vu
     CAPTURE(fragment.info);
     REQUIRE(fragment.success);
     REQUIRE(fragment.spirvWordCount > 0);
+}
+
+TEST_CASE("Vulkan eye-adaptation shader compiles under Vulkan GLSL rules", "[vulkan][shaders]")
+{
+    GlslangInit init;
+
+    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
+    const std::string fragmentSource = ReadTextFile(shaderDir / "eye_adaptation.frag.glsl");
+    REQUIRE_FALSE(fragmentSource.empty());
+
+    const CompileOutcome fragment = CompileVulkanGLSL(fragmentSource, EShLangFragment);
+    CAPTURE(fragment.info);
+    REQUIRE(fragment.success);
+    REQUIRE(fragment.spirvWordCount > 0);
+}
+
+TEST_CASE("Vulkan temporal cloud shaders compile under Vulkan GLSL rules", "[vulkan][shaders][clouds]")
+{
+    GlslangInit init;
+    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
+    const std::array<std::pair<const char*, EShLanguage>, 4> shaders = {{
+        {"volumetric_clouds.vert.glsl", EShLangVertex},
+        {"volumetric_clouds.frag.glsl", EShLangFragment},
+        {"cloud_lighting.frag.glsl", EShLangFragment},
+        {"cloud_temporal.frag.glsl", EShLangFragment},
+    }};
+    for (const auto& [name, stage] : shaders)
+    {
+        const CompileOutcome result = CompileVulkanGLSL(ReadTextFile(shaderDir / name), stage);
+        CAPTURE(name, result.info);
+        REQUIRE(result.success);
+    }
+    const std::string composite = ReadTextFile(shaderDir / "cloud_composite.frag.glsl");
+    REQUIRE(CompileVulkanGLSL(composite, EShLangFragment).success);
 }
 
 TEST_CASE("Vulkan bootstrap push constants match shader contract", "[vulkan][shaders]")

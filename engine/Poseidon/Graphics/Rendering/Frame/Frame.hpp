@@ -200,6 +200,7 @@ struct Pass
 struct Frame
 {
     CameraView camera = {};
+    float cameraPosition[3] = {0.0f, 0.0f, 0.0f};
     std::vector<Pass> passes;
 
     // Frame-global resources (lights, fog, sun) — separate struct
@@ -212,6 +213,7 @@ struct Frame
     // World-space direction the sun light travels (normalized). Matches
     // SceneInputs; backends negate it to obtain the vector toward the light.
     float sunDirection[3] = {0.0f, -1.0f, 0.0f};
+    float wind[3] = {0.0f, 0.0f, 0.0f};
     float localLightScale = 1.0f;
     std::uint32_t localLightCount = 0;
     std::array<LocalLight, kMaxFrameLocalLights> localLights = {};

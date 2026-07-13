@@ -5,6 +5,7 @@
 #include <Poseidon/Graphics/Core/RenderState.hpp>
 #include <Poseidon/World/Scene/Scene.hpp>
 #include <Poseidon/World/Scene/Camera/Camera.hpp>
+#include <Poseidon/World/Terrain/Landscape.hpp>
 #include <Poseidon/Graphics/Rendering/Lighting/Lights.hpp>
 #include <Poseidon/Graphics/Rendering/BuildRenderPassDescriptor.hpp>
 #include <Poseidon/Graphics/Textures/TextureBank.hpp>
@@ -205,6 +206,20 @@ SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
     SceneInputs s;
 
     s.camera = extractCamera(engine, scene);
+    if (const ::Camera* camera = scene.GetCamera())
+    {
+        const Point3 position = camera->Position();
+        s.cameraPosition[0] = position.X();
+        s.cameraPosition[1] = position.Y();
+        s.cameraPosition[2] = position.Z();
+    }
+    if (const Landscape* landscape = scene.GetLandscape())
+    {
+        const Vector3 wind = landscape->GetWind();
+        s.wind[0] = wind.X();
+        s.wind[1] = wind.Y();
+        s.wind[2] = wind.Z();
+    }
 
     // Fog
     s.fogStart = scene.GetFogMinRange();

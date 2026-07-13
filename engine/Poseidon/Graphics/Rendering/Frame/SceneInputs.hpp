@@ -48,6 +48,9 @@ struct SceneInputs
 {
     // Camera + viewport (one of these per frame).
     CameraView camera = {};
+    // Absolute world-space camera origin for effects that cannot use the
+    // camera-relative draw transform, such as world-anchored cloud density.
+    float cameraPosition[3] = {0.0f, 0.0f, 0.0f};
 
     // Lighting + atmospherics (one of each per frame).
     GfxMatrix sunMatrix         = {};
@@ -57,6 +60,8 @@ struct SceneInputs
     // down-and-forward so unlit/extractor-absent frames still have a sane
     // direction rather than (0,0,0) which would produce NaN diffuse terms.
     float     sunDirection[3]   = {0.0f, -1.0f, 0.0f};
+    // Effective world-space weather velocity, including gusts.
+    float     wind[3]           = {0.0f, 0.0f, 0.0f};
     float     localLightScale   = 1.0f;
     std::uint32_t localLightCount = 0;
     std::array<LocalLight, kMaxFrameLocalLights> localLights = {};

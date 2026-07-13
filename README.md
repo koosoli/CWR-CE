@@ -32,16 +32,22 @@ scene with known gaps (see Phase 2 below).
 The Vulkan backend has an opt-in world-composition path for local smoke tests:
 
 - Procedural clear sky with a high-radiance sun and atmospheric halo.
-- Depth-aware world-space volumetric-cloud prototype.
-- Isolated FP16 world target, ACES tone mapping, bloom, and sun-directed eye
-  exposure. Legacy briefing pages, cockpit, HUD, and other display-referred UI
-  are composed after tone mapping.
+- Fixed absolute-world, half-resolution volumetric cloud volume with accumulated
+  landscape wind displacement, a precomputed light cache, temporal
+  reconstruction, and matching terrain cloud shadows. Enable it with
+  `POSEIDON_VK_VOLUMETRIC_CLOUDS=1`; it retains cockpit, binder, HUD, and other
+  legacy display-referred content after world composition.
+- Isolated FP16 world target, ACES tone mapping, bloom, and stable angular eye
+  exposure. GPU-only temporal adaptation is available only with
+  `POSEIDON_VK_TEMPORAL_EXPOSURE=1`; it remains under tuning. Legacy briefing
+  pages, cockpit, HUD, and other display-referred UI are composed after tone
+  mapping.
 - Exposure uses stable camera-to-sun angular metering. Foreground-object sun
   occlusion remains future work because it needs a validated projected
   visibility mask rather than a centre-depth approximation.
 
-This path remains experimental. It does not yet provide temporal eye adaptation,
-a dedicated low-resolution bloom chain, lens flare, or dynamic resolution.
+This path remains experimental. It does not yet provide a dedicated
+low-resolution bloom chain, lens flare, or dynamic resolution.
 GPU timing shows the compositor costs about 0.06 ms in the Demo while world
 rasterization and clouds dominate, so the current frame rate is not expected to
 match the renderer maturity of the reference GL33 path or related renderer forks.
@@ -217,9 +223,11 @@ smoke-testable.
   reflection in dependency order.
 - [ ] Add Forward+ clustered lighting after HDR; do not block water on the full lighting
   implementation.
-- [/] Add opt-in depth-aware world-space volumetric-cloud prototyping after the
-  sky interface is stable. Temporal accumulation, terrain/cloud shadows,
-  weather controls, rain, and particle/weather infrastructure remain outstanding.
+- [x] Add opt-in fixed-world Vulkan volumetric clouds: half-resolution
+  light-cache/raymarch/reconstruction/composite passes, accumulated landscape
+  wind, temporal history invalidation on volume movement, and terrain shadows.
+  Weather controls, rain, external noise assets, and particle/weather
+  infrastructure remain outstanding.
 
 ### Phase 6 - GPU Scale And Optional Tiers
 

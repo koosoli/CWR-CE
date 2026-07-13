@@ -24,12 +24,31 @@ layout(set = 0, binding = 0, std140) uniform FrameConstants
     vec4 cascadeCtl;
     vec4 camFwd;
     vec4 camPos;
+    vec4 specularColor;
+    vec4 specularCtrl;
+    vec4 cloudOrigin;
+    vec4 wind;
+    vec4 windOffset;
 } frame;
 
-layout(input_attachment_index = 0, set = 1, binding = 0) uniform subpassInput sceneDepth;
+layout(set = 1, binding = 0, std140) uniform CloudConstants
+{
+    mat4 previousView;
+    mat4 previousProjection;
+    vec4 cameraPosition;
+    vec4 previousCameraPosition;
+    vec4 windOffset;
+    vec4 previousWindOffset;
+    vec4 volumeOrigin;
+    vec4 renderSizeAndHistory;
+} cloud;
+
+layout(set = 1, binding = 1) uniform sampler2D sceneDepth;
+layout(set = 1, binding = 2) uniform sampler2D cloudLighting;
 
 layout(location = 0) in vec3 vWorldRay;
 layout(location = 1) in vec2 vNdc;
+layout(location = 2) in vec2 vUv;
 layout(location = 0) out vec4 outColor;
 
 float Hash31(vec3 p)
@@ -64,26 +83,21 @@ float Density(vec3 worldPos)
     if (height <= 0.0 || height >= 1.0)
         return 0.0;
 
-    vec3 wind = vec3(frame.time.x * 0.007, 0.0, frame.time.x * 0.002);
-    vec3 p = worldPos * 0.00023 + wind;
+    if (max(abs(worldPos.x - cloud.volumeOrigin.x), abs(worldPos.z - cloud.volumeOrigin.z)) > cloud.volumeOrigin.w)
+        return 0.0;
+    vec3 p = (worldPos - cloud.windOffset.xyz) * 0.00023;
     float shape = ValueNoise(p) * 0.55 + ValueNoise(p * 2.07 + 19.7) * 0.3 + ValueNoise(p * 4.13 - 7.1) * 0.15;
     float vertical = smoothstep(0.0, 0.12, height) * (1.0 - smoothstep(0.62, 1.0, height));
     return max(shape - 0.52, 0.0) * vertical * 2.5;
 }
 
-float LightTransmittance(vec3 worldPos, vec3 lightDirection)
-{
-    float opticalDepth = 0.0;
-    for (int i = 1; i <= 3; ++i)
-        opticalDepth += Density(worldPos + lightDirection * (float(i) * 180.0)) * 0.24;
-    return exp(-opticalDepth);
-}
-
 void main()
 {
     vec3 ray = normalize(vWorldRay);
-    vec3 camera = frame.camPos.xyz;
-    float depth = subpassLoad(sceneDepth).x;
+    // Draw geometry is camera-relative, but cloud density must use the actual
+    // world origin or it will swim against terrain while the player moves.
+    vec3 camera = cloud.cameraPosition.xyz;
+    float depth = texture(sceneDepth, vUv).x;
     float sceneDistance = 60000.0;
     if (depth < 0.999999)
     {
@@ -102,22 +116,24 @@ void main()
     if (exit <= entry)
         discard;
 
-    // The experimental cloud pass is full resolution. Keep its raymarch
-    // budget bounded so scene rasterization remains the primary GPU cost.
-    const int steps = 28;
+    // A jittered low-resolution primary march is reconstructed in a separate
+    // history pass. Lighting is sampled from a precomputed absolute-world map.
+    const int steps = 40;
     float stepLength = (exit - entry) / float(steps);
+    float jitter = fract(sin(dot(gl_FragCoord.xy + cloud.renderSizeAndHistory.w, vec2(12.9898, 78.233))) * 43758.5453);
     float transmittance = 1.0;
     vec3 scattering = vec3(0.0);
     vec3 sun = normalize(-frame.sunDirection.xyz);
     vec3 sunColor = mix(vec3(0.58, 0.65, 0.75), vec3(1.0, 0.78, 0.52), clamp(sun.y * 2.0 + 0.2, 0.0, 1.0));
     for (int i = 0; i < steps; ++i)
     {
-        vec3 samplePosition = camera + ray * (entry + (float(i) + 0.5) * stepLength);
+        vec3 samplePosition = camera + ray * (entry + (float(i) + jitter) * stepLength);
         float density = Density(samplePosition);
         if (density <= 0.0)
             continue;
         float extinction = density * stepLength * 0.00042;
-        float lighting = 0.18 + 0.82 * LightTransmittance(samplePosition, sun);
+        vec2 lightUv = (samplePosition.xz - cloud.volumeOrigin.xz) / (cloud.volumeOrigin.w * 2.0) + 0.5;
+        float lighting = 0.16 + 0.84 * texture(cloudLighting, clamp(lightUv, 0.0, 1.0)).r;
         float powder = 0.55 + 0.45 * pow(max(dot(ray, sun), 0.0), 1.5);
         scattering += transmittance * (1.0 - exp(-extinction)) * sunColor * lighting * powder;
         transmittance *= exp(-extinction);
@@ -128,6 +144,7 @@ void main()
     float alpha = 1.0 - transmittance;
     if (alpha < 0.002)
         discard;
-    // The direct UNORM swapchain remains display-referred; do not introduce HDR here.
-    outColor = vec4(sqrt(clamp(scattering / max(alpha, 0.001), 0.0, 1.0)), alpha);
+    // RGB is premultiplied linear scattering. The later composite uses ONE,
+    // ONE_MINUS_SRC_ALPHA so HDR and UNORM world targets behave identically.
+    outColor = vec4(scattering, alpha);
 }
