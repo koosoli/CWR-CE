@@ -326,5 +326,8 @@ void main()
     vec3 fogged = mix(frame.fogColor.rgb, baseColor, vFogFactor);
     float luma = dot(fogged, vec3(0.2126, 0.7152, 0.0722));
     fogged = mix(vec3(luma), fogged, 1.08);
+    // Partial gamma boost to compensate for UNORM swapchain (no hardware sRGB encode).
+    // pow(x, 1/1.5) is between no boost (too dark) and full sRGB (washed out).
+    fogged = pow(fogged, vec3(1.0 / 1.5));
     outColor = vec4(fogged, baseAlpha);
 }

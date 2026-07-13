@@ -42,5 +42,7 @@ void main()
         c.rgb = mix(pc.fogColor.rgb, c.rgb, clamp(vFogFactor, 0.0, 1.0));
     float luma = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
     c.rgb = mix(vec3(luma), c.rgb, 1.08);
+    // Partial gamma boost to compensate for UNORM swapchain.
+    c.rgb = pow(c.rgb, vec3(1.0 / 1.5));
     outColor = c;
 }

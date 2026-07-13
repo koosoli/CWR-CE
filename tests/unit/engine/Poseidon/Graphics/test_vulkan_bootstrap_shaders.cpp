@@ -115,29 +115,6 @@ TEST_CASE("Vulkan scene shaders compile under Vulkan GLSL rules", "[vulkan][shad
     REQUIRE(fragment.spirvWordCount > 0);
 }
 
-TEST_CASE("Vulkan HDR tonemap shaders compile and encode the display output", "[vulkan][shaders][hdr]")
-{
-    GlslangInit init;
-
-    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
-    const std::string vertexSource = ReadTextFile(shaderDir / "tonemap.vert.glsl");
-    const std::string fragmentSource = ReadTextFile(shaderDir / "tonemap.frag.glsl");
-    REQUIRE_FALSE(vertexSource.empty());
-    REQUIRE_FALSE(fragmentSource.empty());
-
-    const CompileOutcome vertex = CompileVulkanGLSL(vertexSource, EShLangVertex);
-    CAPTURE(vertex.info);
-    REQUIRE(vertex.success);
-    const CompileOutcome fragment = CompileVulkanGLSL(fragmentSource, EShLangFragment);
-    CAPTURE(fragment.info);
-    REQUIRE(fragment.success);
-
-    CHECK(vertexSource.find("gl_VertexIndex") != std::string::npos);
-    CHECK(fragmentSource.find("uniform sampler2D hdrScene") != std::string::npos);
-    CHECK(fragmentSource.find("ToneMapACES") != std::string::npos);
-    CHECK(fragmentSource.find("LinearToSrgb") != std::string::npos);
-}
-
 TEST_CASE("Vulkan bootstrap push constants match shader contract", "[vulkan][shaders]")
 {
     using Poseidon::vk::BootstrapPushConstantsVK;

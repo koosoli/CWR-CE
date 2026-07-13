@@ -132,18 +132,14 @@ class EngineVK : public EngineDummy
     bool CreateBootstrapPipeline();
     bool CreateScenePipeline();
     bool CreateScreenPipeline();
-    bool CreateOverlayPipeline();
-    bool CreateCompositeResources();
     bool CreateScreenPipelineLayout();
     bool CreateScreenDescriptorLayout();
     bool EnsureScreenVertexBufferCapacity(std::size_t vertexCount, std::size_t indexCount);
     void DestroyScreenPipeline();
-    void DestroyCompositeResources();
     void DestroyScreenPipelineLayout();
     void DestroyScreenDescriptorResources();
     void DestroyScreenVertexBuffer();
-    void RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPhaseVK phase, VkPipeline fallbackPipeline,
-                           vk::PipelineCacheVK& pipelineCache, bool forceDepthDisabled);
+    void RecordScreenDraws(VkCommandBuffer commandBuffer, vk::ScreenDrawPhaseVK phase);
     void AppendScreenBatch(std::uint32_t textureId, std::uint32_t indexCount, vk::ScreenDrawPhaseVK phase,
                            const render::RenderPassDescriptor& descriptor);
     void PushScreenQuad(const TLVertex* quad, std::uint32_t textureId,
@@ -212,9 +208,6 @@ class EngineVK : public EngineDummy
     // 2D / screen-space pipeline resources.
     VkPipeline _screenPipeline = VK_NULL_HANDLE;
     vk::PipelineCacheVK _screenPipelineCache;
-    VkPipeline _overlayPipeline = VK_NULL_HANDLE;
-    vk::PipelineCacheVK _overlayPipelineCache;
-    VkPipeline _compositePipeline = VK_NULL_HANDLE;
     VkPipelineLayout _screenPipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout _screenDescriptorSetLayout = VK_NULL_HANDLE;
     VkShaderModule _screenVertexModule = VK_NULL_HANDLE;
@@ -230,13 +223,7 @@ class EngineVK : public EngineDummy
     VkImage _depthImage = VK_NULL_HANDLE;
     VkDeviceMemory _depthImageMemory = VK_NULL_HANDLE;
     VkImageView _depthImageView = VK_NULL_HANDLE;
-    vk::ImageVK _hdrSceneImage;
-    VkSampler _hdrSceneSampler = VK_NULL_HANDLE;
     VkRenderPass _renderPass = VK_NULL_HANDLE;
-    VkRenderPass _compositeRenderPass = VK_NULL_HANDLE;
-    VkFramebuffer _sceneFramebuffer = VK_NULL_HANDLE;
-    VkDescriptorPool _compositeDescriptorPool = VK_NULL_HANDLE;
-    VkDescriptorSet _compositeDescriptorSet = VK_NULL_HANDLE;
     VkCommandPool _commandPool = VK_NULL_HANDLE;
     std::vector<VkImage> _swapchainImages;
     std::vector<VkImageView> _swapchainImageViews;
