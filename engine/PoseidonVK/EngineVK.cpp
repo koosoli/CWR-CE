@@ -79,7 +79,10 @@ static_assert(sizeof(WorldCompositePushConstants) == 8);
 
 enum class SceneGroup : std::uint32_t
 {
-    WorldBase,
+    Terrain,
+    Opaque,
+    Cutout,
+    Other,
     WorldLate,
     Present,
 };
@@ -609,11 +612,25 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
     {
         const vk::SceneDrawCommandVK& command = _lastSceneDrawCommands[commandIndex];
         const auto pass = static_cast<render::PassKind>(_lastDrawConstants[command.drawIndex].pass);
-        SceneGroup group = SceneGroup::WorldBase;
+        SceneGroup group = SceneGroup::Terrain;
         if (WorldCompositionActive())
         {
             switch (pass)
             {
+                case render::PassKind::Sky:
+                case render::PassKind::TerrainOpaque:
+                    break;
+                case render::PassKind::WorldOpaque:
+                    group = SceneGroup::Opaque;
+                    break;
+                case render::PassKind::WorldCutout:
+                    group = SceneGroup::Cutout;
+                    break;
+                case render::PassKind::SurfaceOverlay:
+                case render::PassKind::WorldWater:
+                case render::PassKind::WorldShadow:
+                    group = SceneGroup::Other;
+                    break;
                 case render::PassKind::WorldTransparent:
                 case render::PassKind::WorldLight:
                     group = SceneGroup::WorldLate;
@@ -623,14 +640,6 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
                 case render::PassKind::CockpitTransparent:
                 case render::PassKind::ScreenSpace3D:
                     group = SceneGroup::Present;
-                    break;
-                case render::PassKind::Sky:
-                case render::PassKind::TerrainOpaque:
-                case render::PassKind::WorldOpaque:
-                case render::PassKind::WorldCutout:
-                case render::PassKind::SurfaceOverlay:
-                case render::PassKind::WorldWater:
-                case render::PassKind::WorldShadow:
                     break;
             }
         }
@@ -3080,7 +3089,7 @@ bool EngineVK::CreateGpuTimingResources()
     VkQueryPoolCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     info.queryType = VK_QUERY_TYPE_TIMESTAMP;
-    info.queryCount = 7;
+    info.queryCount = 11;
     return vkCreateQueryPool(_device, &info, nullptr, &_gpuTimingQueryPool) == VK_SUCCESS;
 }
 
@@ -3097,7 +3106,7 @@ void EngineVK::LogGpuTimings()
     if (!_gpuTimingPending || !_gpuTimingQueryPool || _timestampPeriodNs <= 0.0f)
         return;
 
-    std::array<std::uint64_t, 7> timestamps{};
+    std::array<std::uint64_t, 11> timestamps{};
     const VkResult result = vkGetQueryPoolResults(_device, _gpuTimingQueryPool, 0,
                                                    static_cast<uint32_t>(timestamps.size()), sizeof(timestamps),
                                                    timestamps.data(), sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT);
@@ -3112,8 +3121,10 @@ void EngineVK::LogGpuTimings()
     {
         return static_cast<double>(timestamps[end] - timestamps[begin]) * _timestampPeriodNs * 1e-6;
     };
-    LOG_INFO(Graphics, "Vulkan GPU ms: world={:.2f} base={:.2f} clouds={:.2f} late={:.2f} compositor={:.2f} present={:.2f}",
-             elapsedMs(0, 3), elapsedMs(0, 1), elapsedMs(1, 2), elapsedMs(2, 3), elapsedMs(4, 5), elapsedMs(4, 6));
+    LOG_INFO(Graphics,
+             "Vulkan GPU ms: world={:.2f} terrain={:.2f} opaque={:.2f} cutout={:.2f} other={:.2f} clouds={:.2f} late={:.2f} compositor={:.2f} present={:.2f}",
+             elapsedMs(0, 7), elapsedMs(0, 1), elapsedMs(1, 2), elapsedMs(2, 3), elapsedMs(3, 4), elapsedMs(5, 6),
+             elapsedMs(6, 7), elapsedMs(8, 9), elapsedMs(8, 10));
 }
 
 bool EngineVK::UploadDrawConstants()
@@ -3164,7 +3175,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     }
     if (_gpuTimingQueryPool)
     {
-        vkCmdResetQueryPool(commandBuffer, _gpuTimingQueryPool, 0, 7);
+        vkCmdResetQueryPool(commandBuffer, _gpuTimingQueryPool, 0, 11);
         vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, _gpuTimingQueryPool, 0);
     }
 
@@ -3410,7 +3421,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                     vkCmdDrawIndexed(commandBuffer, indexCount, 1, firstIndex, 0, 0);
             }
         }
-        else if (group == SceneGroup::WorldBase && _hasFrameConstants)
+        else if (group == SceneGroup::Terrain && _hasFrameConstants)
         {
             // No drawable scene commands yet, but frame constants are available:
             // draw the bring-up quad under the real camera transform so the scene
@@ -3443,11 +3454,22 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
             vkCmdDrawIndexed(commandBuffer, kSceneQuadIndexCount, 1, 0, 0, 0);
         }
     };
-    recordSceneDraws(SceneGroup::WorldBase);
+    recordSceneDraws(SceneGroup::Terrain);
     if (WorldCompositionActive())
     {
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 1);
+        recordSceneDraws(SceneGroup::Opaque);
+        if (_gpuTimingQueryPool)
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 2);
+        recordSceneDraws(SceneGroup::Cutout);
+        if (_gpuTimingQueryPool)
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 3);
+        recordSceneDraws(SceneGroup::Other);
+        if (_gpuTimingQueryPool)
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 4);
+        if (_gpuTimingQueryPool)
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 5);
         vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
         if (_volumetricCloudsEnabled && _volumetricCloudPipeline && _volumetricCloudDescriptorSet && _hasFrameConstants)
         {
@@ -3460,12 +3482,12 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
             EndDebugLabel(commandBuffer);
         }
         if (_gpuTimingQueryPool)
-            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 2);
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 6);
         vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
         recordSceneDraws(SceneGroup::WorldLate);
         vkCmdEndRenderPass(commandBuffer);
         if (_gpuTimingQueryPool)
-            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 3);
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 7);
         EndDebugLabel(commandBuffer);
 
         // Keep briefing/control objects and HUD out of the world target. They are
@@ -3476,7 +3498,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         renderPassInfo.framebuffer = _framebuffers[imageIndex];
         vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
         if (_gpuTimingQueryPool)
-            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, _gpuTimingQueryPool, 4);
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, _gpuTimingQueryPool, 8);
         if (_worldCompositePipeline && _worldCompositeDescriptorSet)
         {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _worldCompositePipeline);
@@ -3488,13 +3510,13 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
             vkCmdDraw(commandBuffer, 3, 1, 0, 0);
         }
         if (_gpuTimingQueryPool)
-            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 5);
+            vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 9);
         recordSceneDraws(SceneGroup::Present);
     }
     RecordScreenDraws(commandBuffer, vk::ScreenDrawPhaseVK::Overlay);
     vkCmdEndRenderPass(commandBuffer);
     if (_gpuTimingQueryPool && WorldCompositionActive())
-        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 6);
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 10);
 
     EndDebugLabel(commandBuffer);
 
