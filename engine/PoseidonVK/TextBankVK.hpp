@@ -11,7 +11,8 @@ class EngineVK;
 // Vulkan texture bank — manages the lifetime of all TextureVK objects for
 // one EngineVK instance. Mirrors TextBankGL33's public contract but without
 // the GL-specific MipCache / memory-budget machinery. All textures are
-// uploaded to device-local memory on first Load() and kept resident until
+// decoded synchronously and queued for device-local upload on first Load(),
+// then kept resident until
 // FlushTextures() / ReleaseAllTextures() is called.
 class TextBankVK : public AbstractTextBank
 {

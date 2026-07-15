@@ -1289,7 +1289,13 @@ void EngineVK::RenderShadowDepthFramePlan(const render::frame::Frame& frame)
         if (draw.alphaTested)
         {
             TextureVK* texture = ResolveTexture(draw.alphaTextureId);
-            draw.alphaDescriptor = texture ? texture->GetDescriptorSet() : VK_NULL_HANDLE;
+            // The main frame command buffer records newly decoded textures
+            // after this shadow submission is prepared. Do not sample an
+            // image still in UNDEFINED layout here; use an opaque depth draw
+            // for this one shadow update, then alpha-test it next frame.
+            if (!texture || !texture->IsGpuReadyForSampling())
+                draw.alphaTested = false;
+            draw.alphaDescriptor = draw.alphaTested ? texture->GetDescriptorSet() : VK_NULL_HANDLE;
             if (draw.alphaDescriptor == VK_NULL_HANDLE && _fallbackWhiteTexture)
                 draw.alphaDescriptor = _fallbackWhiteTexture->GetDescriptorSet();
         }

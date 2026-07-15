@@ -232,5 +232,4 @@ class ITextureSourceFactory
 // Pick a texture source factory from the file name's extension.
 ITextureSourceFactory *SelectTextureSourceFactory(const char *name);
 
-
 } // namespace Poseidon

@@ -234,6 +234,17 @@ class EngineVK : public EngineDummy
     void RegisterTexture(TextureVK* tex);
     void UnregisterTexture(TextureVK* tex);
     TextureVK* ResolveTexture(std::uint32_t id) const;
+    void QueueTextureUpload(TextureVK* tex);
+    void CancelTextureUpload(TextureVK* tex);
+    void RetireTextureResources(vk::ImageVK image, VkSampler sampler, VkDescriptorSet descriptorSet,
+                                std::array<VkSampler, 8> samplerVariants,
+                                std::array<VkDescriptorSet, 8> descriptorVariants,
+                                std::vector<vk::BufferVK> pendingStaging);
+    void RetireTextureStaging(vk::BufferVK staging);
+    void RecordPendingTextureUploads(VkCommandBuffer commandBuffer);
+    void CommitRecordedTextureUploads();
+    void DiscardRecordedTextureUploads();
+    void ReleaseCompletedTextureResources();
 
     bool CreateTextureDescriptorLayout();
     bool CreateTextureDescriptorPool();
@@ -492,6 +503,23 @@ class EngineVK : public EngineDummy
     TextBankVK* _textBank = nullptr;
     std::unordered_map<std::uint32_t, TextureVK*> _textureRegistry;
     Ref<TextureVK> _fallbackWhiteTexture; // 1x1 neutral-grey fallback for missing textures
+    // Render-thread-only GPU upload lifecycle.
+    std::vector<TextureVK*> _pendingTextureUploads;
+    // An upload remains owned by TextureVK until vkQueueSubmit succeeds.  This
+    // lets a failed/discarded command buffer re-record its original layout
+    // transition rather than falsely registering the image as shader-readable.
+    std::vector<TextureVK*> _recordedTextureUploads;
+    std::vector<vk::BufferVK> _inFlightTextureUploadStaging;
+    struct RetiredTextureResourcesVK
+    {
+        vk::ImageVK image;
+        VkSampler sampler = VK_NULL_HANDLE;
+        VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+        std::array<VkSampler, 8> samplerVariants = {};
+        std::array<VkDescriptorSet, 8> descriptorVariants = {};
+        std::vector<vk::BufferVK> pendingStaging;
+    };
+    std::vector<RetiredTextureResourcesVK> _retiredTextureResources;
 
     // Shadow resources
     static constexpr int kShadowCascades = 4;

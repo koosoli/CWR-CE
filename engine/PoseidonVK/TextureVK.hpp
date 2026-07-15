@@ -4,6 +4,8 @@
 #include <Poseidon/Graphics/Textures/TextureBank.hpp>
 
 #include <array>
+#include <cstdint>
+#include <vector>
 
 namespace Poseidon
 {
@@ -63,9 +65,24 @@ public:
         return _image.image != VK_NULL_HANDLE && _image.view != VK_NULL_HANDLE &&
                _sampler != VK_NULL_HANDLE && _descriptorSet != VK_NULL_HANDLE;
     }
+    // The descriptor becomes usable once its copy/layout transition has been
+    // recorded ahead of the scene pass on the frame command buffer.
+    bool IsGpuReadyForSampling() const noexcept { return _gpuReadyForSampling; }
 
 private:
+    struct PendingMipUpload
+    {
+        vk::BufferVK staging;
+        std::uint32_t mipLevel = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+    };
+
     bool UploadMips();
+    bool QueueDynamicUpload(const void* rgba, std::uint32_t size);
+    bool RecordPendingUpload(VkCommandBuffer commandBuffer);
+    void CommitPendingUpload(std::vector<vk::BufferVK>& inFlightStaging);
+    void DiscardPendingUpload() noexcept;
 
     EngineVK& _engine;
     std::uint32_t _resourceId = 0;
@@ -87,7 +104,15 @@ private:
     mutable std::array<VkSampler, 8> _samplerVariants = {};
     mutable std::array<VkDescriptorSet, 8> _descriptorVariants = {};
     std::uint32_t _baseSamplerKey = 0;
-    bool _dynamicImageUploaded = false;
+    // This becomes true only after the command buffer containing the initial
+    // UNDEFINED -> transfer -> shader-read transition was successfully
+    // submitted.  A queued/recorded upload is not yet an initialized layout.
+    bool _imageLayoutInitialized = false;
+    bool _initialUploadPending = false;
+    bool _uploadRecorded = false;
+    bool _gpuReadyForSampling = false;
+    std::uint32_t _fileMipCount = 0;
+    std::vector<PendingMipUpload> _pendingMipUploads;
     signed char _alphaClass = -1;
 };
 

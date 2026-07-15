@@ -5205,6 +5205,11 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, _gpuTimingQueryPool, 0);
     }
 
+    // Texture decode, staging, copy recording, and submission all remain on
+    // this render thread.  The queued lifecycle below owns staging through the
+    // frame fence without a per-texture queue idle.
+    RecordPendingTextureUploads(commandBuffer);
+
     // Bake before opening the world pass so the cached HDR image is available
     // to the sky draw and remains independent from scene depth/world geometry.
     if (ProceduralSkyActive() && !RecordSkyMapBake(commandBuffer))
@@ -6076,6 +6081,7 @@ void EngineVK::PresentBootstrapFrame()
                                std::chrono::steady_clock::now() - fenceWaitStarted)
                                .count();
     LogGpuTimings();
+    ReleaseCompletedTextureResources();
 
     uint32_t imageIndex = 0;
     VkResult result =
@@ -6097,7 +6103,10 @@ void EngineVK::PresentBootstrapFrame()
                               std::chrono::steady_clock::now() - commandRecordStarted)
                               .count();
     if (!recordedCommand)
+    {
+        DiscardRecordedTextureUploads();
         return;
+    }
 
     vkResetFences(_device, 1, &_inFlight);
 
@@ -6116,9 +6125,11 @@ void EngineVK::PresentBootstrapFrame()
     if (result != VK_SUCCESS)
     {
         LOG_ERROR(Graphics, "Vulkan: vkQueueSubmit failed: {}", VkResultName(result));
+        DiscardRecordedTextureUploads();
         RecreateSignaledFence(_device, _inFlight);
         return;
     }
+    CommitRecordedTextureUploads();
     if (_eyeAdaptationPendingWrite)
     {
         _eyeAdaptationCurrentIndex = _eyeAdaptationPendingIndex;
@@ -6159,6 +6170,7 @@ void EngineVK::Shutdown()
     if (_device)
     {
         vkDeviceWaitIdle(_device);
+        ReleaseCompletedTextureResources();
         DestroyShadowCasterMeshes();
         if (_inFlight)
         {
@@ -6454,6 +6466,124 @@ void EngineVK::RegisterTexture(TextureVK* tex)
 {
     if (tex && tex->HasValidGpuImage())
         _textureRegistry[tex->GetResourceId()] = tex;
+}
+
+void EngineVK::QueueTextureUpload(TextureVK* tex)
+{
+    if (!tex)
+        return;
+    if (std::find(_pendingTextureUploads.begin(), _pendingTextureUploads.end(), tex) == _pendingTextureUploads.end())
+        _pendingTextureUploads.push_back(tex);
+}
+
+void EngineVK::CancelTextureUpload(TextureVK* tex)
+{
+    _pendingTextureUploads.erase(std::remove(_pendingTextureUploads.begin(), _pendingTextureUploads.end(), tex),
+                                 _pendingTextureUploads.end());
+    _recordedTextureUploads.erase(std::remove(_recordedTextureUploads.begin(), _recordedTextureUploads.end(), tex),
+                                  _recordedTextureUploads.end());
+}
+
+void EngineVK::RetireTextureResources(vk::ImageVK image, VkSampler sampler, VkDescriptorSet descriptorSet,
+                                      std::array<VkSampler, 8> samplerVariants,
+                                      std::array<VkDescriptorSet, 8> descriptorVariants,
+                                      std::vector<vk::BufferVK> pendingStaging)
+{
+    RetiredTextureResourcesVK retired;
+    retired.image = image;
+    retired.sampler = sampler;
+    retired.descriptorSet = descriptorSet;
+    retired.samplerVariants = samplerVariants;
+    retired.descriptorVariants = descriptorVariants;
+    retired.pendingStaging = std::move(pendingStaging);
+    _retiredTextureResources.push_back(std::move(retired));
+}
+
+void EngineVK::RetireTextureStaging(vk::BufferVK staging)
+{
+    if (!staging.buffer && !staging.memory)
+        return;
+    RetiredTextureResourcesVK retired;
+    retired.pendingStaging.push_back(staging);
+    _retiredTextureResources.push_back(std::move(retired));
+}
+
+void EngineVK::RecordPendingTextureUploads(VkCommandBuffer commandBuffer)
+{
+    for (TextureVK* texture : _pendingTextureUploads)
+    {
+        if (!texture)
+            continue;
+        if (texture->RecordPendingUpload(commandBuffer))
+        {
+            _recordedTextureUploads.push_back(texture);
+        }
+    }
+    _pendingTextureUploads.clear();
+}
+
+void EngineVK::CommitRecordedTextureUploads()
+{
+    for (TextureVK* texture : _recordedTextureUploads)
+    {
+        if (texture)
+            texture->CommitPendingUpload(_inFlightTextureUploadStaging);
+    }
+    _recordedTextureUploads.clear();
+}
+
+void EngineVK::DiscardRecordedTextureUploads()
+{
+    // No command buffer was submitted, so its barriers did not affect image
+    // layout and its staging must remain available for a later recording.
+    // Re-queue the texture instead of destroying the source and pretending its
+    // image made the transition to SHADER_READ_ONLY_OPTIMAL.
+    for (TextureVK* texture : _recordedTextureUploads)
+    {
+        if (texture)
+        {
+            texture->DiscardPendingUpload();
+            QueueTextureUpload(texture);
+        }
+    }
+    _recordedTextureUploads.clear();
+}
+
+void EngineVK::ReleaseCompletedTextureResources()
+{
+    // Call only after _inFlight has completed (or vkDeviceWaitIdle at
+    // shutdown). This is the sole destruction point for queued transfer
+    // staging and for images/descriptors retired by TextureVK.
+    for (vk::BufferVK& staging : _inFlightTextureUploadStaging)
+        vk::DestroyBuffer(_device, staging);
+    _inFlightTextureUploadStaging.clear();
+    for (RetiredTextureResourcesVK& retired : _retiredTextureResources)
+    {
+        for (vk::BufferVK& staging : retired.pendingStaging)
+            vk::DestroyBuffer(_device, staging);
+        if (_device && _textureDescriptorPool)
+        {
+            for (VkDescriptorSet& descriptor : retired.descriptorVariants)
+            {
+                if (descriptor)
+                    vkFreeDescriptorSets(_device, _textureDescriptorPool, 1, &descriptor);
+            }
+            if (retired.descriptorSet)
+                vkFreeDescriptorSets(_device, _textureDescriptorPool, 1, &retired.descriptorSet);
+        }
+        if (_device)
+        {
+            for (VkSampler& sampler : retired.samplerVariants)
+            {
+                if (sampler)
+                    vkDestroySampler(_device, sampler, nullptr);
+            }
+            if (retired.sampler)
+                vkDestroySampler(_device, retired.sampler, nullptr);
+        }
+        vk::DestroyImage(_device, retired.image);
+    }
+    _retiredTextureResources.clear();
 }
 
 void EngineVK::UnregisterTexture(TextureVK* tex)

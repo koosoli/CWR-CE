@@ -75,9 +75,7 @@ MipInfo TextBankVK::UseMipmap(Texture* tex, int level, int /*top*/)
 // ---------------------------------------------------------------------------
 void TextBankVK::FlushTextures()
 {
-    // Wait for GPU idle before destroying images so in-flight draws finish
-    if (_engine._device)
-        vkDeviceWaitIdle(_engine._device);
+    // TextureVK retires GPU resources through EngineVK's _inFlight fence.
     // Release all Lock() refcounts before discarding the weak-link array.
     // LockAllTextures() bumps _refCountLocked on every texture in _textures;
     // if we clear _textures first the matching Unlock() is never called,
@@ -94,8 +92,6 @@ void TextBankVK::FlushTextures()
 
 void TextBankVK::ReleaseAllTextures()
 {
-    if (_engine._device)
-        vkDeviceWaitIdle(_engine._device);
     _textures.Clear();
     _detail.Free();
     _waterBump.Free();
@@ -191,38 +187,8 @@ void TextBankVK::UpdateDynamic(Texture* t, const void* rgba, uint32_t size)
     if (!tex || !tex->_image.image || !rgba || size == 0)
         return;
 
-    vk::BufferVK staging;
-    VkResult r = vk::CreateHostVisibleBuffer(
-        _engine._physicalDevice, _engine._device,
-        static_cast<VkDeviceSize>(size),
-        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        staging);
-    if (r != VK_SUCCESS)
-        return;
-
-    vk::UploadMappedBuffer(staging, rgba, size);
-
-    const VkImageLayout oldLayout = tex->_dynamicImageUploaded
-                                        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                        : VK_IMAGE_LAYOUT_UNDEFINED;
-
-    // Transition to TRANSFER_DST, copy, then SHADER_READ_ONLY.
-    vk::TransitionImageLayout(_engine._device, _engine._commandPool, _engine._graphicsQueue,
-                              tex->_image.image, 1,
-                              oldLayout,
-                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
-    vk::CopyBufferToImage(_engine._device, _engine._commandPool, _engine._graphicsQueue,
-                          staging.buffer, tex->_image.image,
-                          static_cast<uint32_t>(tex->_w), static_cast<uint32_t>(tex->_h), 0);
-
-    vk::TransitionImageLayout(_engine._device, _engine._commandPool, _engine._graphicsQueue,
-                              tex->_image.image, 1,
-                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    tex->_dynamicImageUploaded = true;
-
-    vk::DestroyBuffer(_engine._device, staging);
+    if (!tex->QueueDynamicUpload(rgba, size))
+        LOG_WARN(Graphics, "TextBankVK: unable to queue dynamic texture upload");
 }
 
 void TextBankVK::StartFrame()

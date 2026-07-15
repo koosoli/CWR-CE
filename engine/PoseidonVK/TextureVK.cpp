@@ -96,37 +96,22 @@ TextureVK::TextureVK(EngineVK& engine)
 TextureVK::~TextureVK()
 {
     _engine.UnregisterTexture(this);
-
-    VkDevice dev = _engine._device;
-    // Block until the GPU finishes any commands that reference this texture
-    // before we free the descriptor set, sampler, or image.  Texture
-    // destruction happens at mission load/unload boundaries, so a full idle
-    // stall is acceptable here.
-    if (dev)
-        vkDeviceWaitIdle(dev);
-    if (dev && _engine._textureDescriptorPool)
-    {
-        for (VkDescriptorSet& descriptorSet : _descriptorVariants)
-        {
-            if (descriptorSet)
-                vkFreeDescriptorSets(dev, _engine._textureDescriptorPool, 1, &descriptorSet);
-        }
-        if (_descriptorSet)
-            vkFreeDescriptorSets(dev, _engine._textureDescriptorPool, 1, &_descriptorSet);
-        _descriptorSet = VK_NULL_HANDLE;
-    }
-    if (dev)
-    {
-        for (VkSampler& sampler : _samplerVariants)
-        {
-            if (sampler)
-                vkDestroySampler(dev, sampler, nullptr);
-        }
-        if (_sampler)
-            vkDestroySampler(dev, _sampler, nullptr);
-        _sampler = VK_NULL_HANDLE;
-    }
-    vk::DestroyImage(dev, _image);
+    _engine.CancelTextureUpload(this);
+    // The texture can be released while the prior frame still samples it, or
+    // after this frame has recorded its upload.  EngineVK owns the retirement
+    // queue and destroys these only after _inFlight has completed.
+    std::vector<vk::BufferVK> pendingStaging;
+    pendingStaging.reserve(_pendingMipUploads.size());
+    for (PendingMipUpload& upload : _pendingMipUploads)
+        pendingStaging.push_back(upload.staging);
+    _pendingMipUploads.clear();
+    _engine.RetireTextureResources(std::move(_image), _sampler, _descriptorSet,
+                                   _samplerVariants, _descriptorVariants, std::move(pendingStaging));
+    _image = {};
+    _sampler = VK_NULL_HANDLE;
+    _descriptorSet = VK_NULL_HANDLE;
+    _samplerVariants = {};
+    _descriptorVariants = {};
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +136,9 @@ bool TextureVK::Init(RStringB name)
         return true; // not a hard failure: game continues with missing-texture colour
     }
 
+    // Match the established GL33 data path: parse the complete source on the
+    // render thread while the VFS is available. Every valid load therefore has
+    // dimensions, image, descriptor, and registry entry before frame capture.
     _src = factory->Create(resolved, _mipmaps, MAX_MIPMAPS);
     if (!_src)
         return true;
@@ -160,7 +148,7 @@ bool TextureVK::Init(RStringB name)
         _src->ForceAlpha();
 
     // Count usable mip levels (stop at 2×2 minimum — mirrors TextureDummy)
-    const int totalMips = _src->GetMipmapCount();
+    const int totalMips = std::min(_src->GetMipmapCount(), MAX_MIPMAPS);
     _nMipmaps = 0;
     for (int i = 0; i < totalMips; ++i)
     {
@@ -183,325 +171,221 @@ bool TextureVK::Init(RStringB name)
     else
         _maxSize = ENGINE_CONFIG.maxObjText;
 
-    // Compute the decode-target format from the source format, then initialise
-    // _dFormat on every mip.  This mirrors TextureGL33_Init.cpp lines 233-246:
-    //   dFormat = DstFormat(srcFmt, dxt);
-    //   for each mip: mip.SetDestFormat(dFormat, 8);
-    // SetDestFormat MUST be called during Init — not only during the upload
-    // loop — because DstFormat() returns the raw _dFormat member with NO
-    // fallback.  Without this step _dFormat stays 0, SetDestFormat(0) later
-    // would hit the default Fail path, and LoadPaaBin16 would assert
-    // '_sFormat == _dFormat'.
-    //
-    // CHANNEL-ORDER NOTE: PacARGB4444 and PacARGB1555 keep their native format
-    // so that GetMipmapData / LoadPaaBin16's '_sFormat==_dFormat' assertion
-    // passes. UploadMips will then transcode the raw 16-bit pixels to RGBA8.
     _nativeSrcFormat = sourceFormat;
     const PacFormat uploadFmt = DstFormatVK(_nativeSrcFormat);
-    // Use uploadFmt (not _nativeSrcFormat) for the VkImage format lookup so that
-    // palette-expand paths (PacP8 → PacARGB1555) get the right VkFormat and the
-    // transcoder in UploadMips fires correctly.
     const FormatInfo fi = PacFormatToVk(uploadFmt);
-    // Compute the full mip chain so the VkImage backing covers all levels.
-    // Non-DXT textures will have missing levels generated via vkCmdBlitImage;
-    // DXT textures are limited to whatever the file provides.
-    const bool canGenerateMips = (sourceFormat != PacDXT1 && sourceFormat != PacDXT2 &&
-                                  sourceFormat != PacDXT3 && sourceFormat != PacDXT4 &&
-                                  sourceFormat != PacDXT5);
-    const int fullMipCount = canGenerateMips
-        ? static_cast<int>(std::bit_width(
-              std::max(static_cast<uint32_t>(_w), static_cast<uint32_t>(_h))))
-        : _nMipmaps;
-    const uint32_t levels = static_cast<uint32_t>(fullMipCount);
-
+    const bool canGenerateMips = sourceFormat != PacDXT1 && sourceFormat != PacDXT2 &&
+                                 sourceFormat != PacDXT3 && sourceFormat != PacDXT4 &&
+                                 sourceFormat != PacDXT5;
+    const std::uint32_t levels = canGenerateMips
+                                     ? std::bit_width(std::max(static_cast<std::uint32_t>(_w),
+                                                                static_cast<std::uint32_t>(_h)))
+                                     : static_cast<std::uint32_t>(_nMipmaps);
     for (int i = 0; i < _nMipmaps; ++i)
         _mipmaps[i].SetDestFormat(uploadFmt, 8);
-
-    // Create device-local image + view with full mip chain capacity.
-    // TRANSFER_SRC_BIT is needed when blit-generating missing mip levels.
-    VkResult r = vk::CreateImage2D(
-        _engine._physicalDevice, _engine._device,
-        static_cast<uint32_t>(_w), static_cast<uint32_t>(_h), levels,
-        fi.vkFmt,
-        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-        _image);
-    if (r != VK_SUCCESS)
+    if (vk::CreateImage2D(_engine._physicalDevice, _engine._device, static_cast<std::uint32_t>(_w),
+                          static_cast<std::uint32_t>(_h), levels, fi.vkFmt,
+                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                          VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, _image) != VK_SUCCESS)
     {
-        LOG_ERROR(Graphics, "TextureVK: CreateImage2D failed ({}) for '{}'", (int)r, (const char*)name);
-        return true; // fallback
+        LOG_ERROR(Graphics, "TextureVK: CreateImage2D failed for '{}'", (const char*)name);
+        return true;
     }
-
-    // Transition first _nMipmaps (file-provided) to TRANSFER_DST for upload;
-    // the remaining levels start UNDEFINED and will be transitioned during
-    // the blit generation pass inside UploadMips.
-    vk::TransitionImageLayout(_engine._device, _engine._commandPool, _engine._graphicsQueue,
-                              _image.image, static_cast<uint32_t>(_nMipmaps),
-                              VK_IMAGE_LAYOUT_UNDEFINED,
-                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
-    // Upload file mips and generate any missing levels.  This function now
-    // handles ALL layout transitions: file mips arrive in TRANSFER_DST, and
-    // on success every mip level ends in SHADER_READ_ONLY_OPTIMAL.
-    if (!UploadMips())
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = samplerInfo.addressModeV = samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.anisotropyEnable = VK_TRUE;
+    samplerInfo.maxAnisotropy = _engine._maxSamplerAnisotropy;
+    samplerInfo.maxLod = static_cast<float>(levels - 1);
+    if (vkCreateSampler(_engine._device, &samplerInfo, nullptr, &_sampler) != VK_SUCCESS)
     {
-        LOG_WARN(Graphics, "TextureVK: mip upload partial for '{}'", (const char*)name);
-    }
-
-    // Create sampler
-    VkSamplerCreateInfo si{};
-    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    si.magFilter = VK_FILTER_LINEAR;
-    si.minFilter = VK_FILTER_LINEAR;
-    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    si.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
-    si.mipLodBias = 0.0f;
-    si.anisotropyEnable = VK_TRUE;
-    si.maxAnisotropy = _engine._maxSamplerAnisotropy;
-    si.compareEnable = VK_FALSE;
-    si.minLod = 0.0f;
-    si.maxLod = static_cast<float>(std::max(_nMipmaps - 1, 0));
-    si.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
-
-    if (vkCreateSampler(_engine._device, &si, nullptr, &_sampler) != VK_SUCCESS)
-    {
+        vk::DestroyImage(_engine._device, _image);
         LOG_WARN(Graphics, "TextureVK: sampler creation failed for '{}'", (const char*)name);
         return true;
     }
-
-    // Allocate and update descriptor set
-    VkDescriptorSetAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    allocInfo.descriptorPool = _engine._textureDescriptorPool;
-    allocInfo.descriptorSetCount = 1;
-    allocInfo.pSetLayouts = &_engine._textureDescriptorSetLayout;
-
-    if (vkAllocateDescriptorSets(_engine._device, &allocInfo, &_descriptorSet) == VK_SUCCESS)
+    VkDescriptorSetAllocateInfo allocateInfo{};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocateInfo.descriptorPool = _engine._textureDescriptorPool;
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &_engine._textureDescriptorSetLayout;
+    if (vkAllocateDescriptorSets(_engine._device, &allocateInfo, &_descriptorSet) != VK_SUCCESS)
     {
-        VkDescriptorImageInfo imageInfo{};
-        imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        imageInfo.imageView = _image.view;
-        imageInfo.sampler = _sampler;
-
-        VkWriteDescriptorSet write{};
-        write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write.dstSet = _descriptorSet;
-        write.dstBinding = 0;
-        write.dstArrayElement = 0;
-        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.descriptorCount = 1;
-        write.pImageInfo = &imageInfo;
-
-        vkUpdateDescriptorSets(_engine._device, 1, &write, 0, nullptr);
-        _engine.RegisterTexture(this);
-    }
-    else
-    {
+        vkDestroySampler(_engine._device, _sampler, nullptr); _sampler = VK_NULL_HANDLE;
+        vk::DestroyImage(_engine._device, _image);
         LOG_WARN(Graphics, "TextureVK: descriptor allocation failed for '{}'", (const char*)name);
+        return true;
     }
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imageInfo.imageView = _image.view;
+    imageInfo.sampler = _sampler;
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = _descriptorSet;
+    write.dstBinding = 0;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorCount = 1;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(_engine._device, 1, &write, 0, nullptr);
 
+    // The descriptor is registered synchronously with texture creation. The
+    // frame command records its staged copies before the scene pass, allowing
+    // all normal textures loaded during setup to bind on that first frame.
+    _engine.RegisterTexture(this);
+    if (!UploadMips())
+        LOG_WARN(Graphics, "TextureVK: no mip data queued for '{}'", (const char*)name);
     return true;
 }
 
 bool TextureVK::UploadMips()
 {
-    if (!_src || !_image.image)
+    if (!_src || !_image.image || _nMipmaps <= 0)
         return false;
+    for (PendingMipUpload& upload : _pendingMipUploads)
+        _engine.RetireTextureStaging(upload.staging);
+    _pendingMipUploads.clear();
 
-    // _dFormat was populated on every mip during Init via SetDestFormat.
-    // DstFormat() is now valid (non-zero) — same pattern as GL33_Loading.cpp.
     const PacFormat sharedFmt = _mipmaps[0].DstFormat();
-
-    // Flag whether UploadMips must transcode pixels before GPU upload.
-    // Use sharedFmt (the actual decoded format set on the mips via SetDestFormat)
-    // rather than _nativeSrcFormat, so that palette-expand paths
-    // (PacP8 → PacARGB1555) and any other aliasing are handled correctly.
-    // sharedFmt exactly matches what GetMipmapData produces.
-    //
-    // PacARGB4444 raw bytes: A4R4G4B4 (bits 15-12=A, 11-8=R, 7-4=G, 3-0=B)
-    // PacARGB1555 raw bytes: A1R5G5B5 (bit15=A, 14-10=R, 9-5=G, 4-0=B)
-    // PacARGB8888 raw bytes: [B,G,R,A] on the supported little-endian target.
-    // None of these map correctly to any Vulkan format without conversion.
-    // GL33 uses GL_BGRA+GL_UNSIGNED_SHORT/INT_*_REV for the byte-swap; we
-    // perform the equivalent conversion in software during UploadMips.
-    const bool transcode4444 = (sharedFmt == PacARGB4444);
-    const bool transcode1555 = (sharedFmt == PacARGB1555);
-    const bool transcode8888 = (sharedFmt == PacARGB8888);
-    // PacAI88: two bytes per pixel [grey, alpha].  VK_FORMAT_R8G8_UNORM would
-    // put grey in .r and alpha in .g, leaving .a = 1.0 as Vulkan defines for a
-    // 2-channel format — alpha tests never fire.  We upload as RGBA8 instead,
-    // replicating grey to RGB and copying alpha to the A channel.
-    const bool transcodeAI88 = (sharedFmt == PacAI88);
+    const bool transcode4444 = sharedFmt == PacARGB4444;
+    const bool transcode1555 = sharedFmt == PacARGB1555;
+    const bool transcode8888 = sharedFmt == PacARGB8888;
+    const bool transcodeAI88 = sharedFmt == PacAI88;
     const bool needsTranscode = transcode4444 || transcode1555 || transcode8888 || transcodeAI88;
+    _fileMipCount = static_cast<std::uint32_t>(_nMipmaps);
 
-    for (int i = 0; i < _nMipmaps; ++i)
+    for (std::uint32_t level = 0; level < _fileMipCount; ++level)
     {
-        const PacLevelMem& srcMip = _mipmaps[i];
+        const PacLevelMem& srcMip = _mipmaps[level];
         PacLevelMem mip = srcMip;
-        // Mirror GL33_Loading.cpp:102 — only override if this mip diverges
-        // from the shared format (rare mixed-format PAAs).
         if (mip.DstFormat() != sharedFmt)
             mip.SetDestFormat(sharedFmt, 8);
-
         const auto layout = render::mipmap::ComputeLayout(sharedFmt, srcMip._w, srcMip._h);
         const std::size_t dataSize = static_cast<std::size_t>(layout.dataSize);
         if (dataSize == 0)
             continue;
+        std::vector<std::uint8_t> sourcePixels(dataSize);
+        if (!_src->GetMipmapData(sourcePixels.data(), mip, static_cast<int>(level)))
+            std::memset(sourcePixels.data(), 0, sourcePixels.size());
 
-        // Allocate staging buffer. Transcoded formats are always 4 bytes/pixel
-        // (RGBA8) regardless of source width: 16-bit formats expand, 8888 swaps in-place.
-        // AI88 expands from 2 bytes/pixel to 4 bytes/pixel.
-        const std::size_t pixelCount = static_cast<std::size_t>(srcMip._w) * static_cast<std::size_t>(srcMip._h);
-        const std::size_t uploadSize = needsTranscode ? pixelCount * 4u : dataSize;
-
-        vk::BufferVK staging;
-        VkResult r = vk::CreateHostVisibleBuffer(
-            _engine._physicalDevice, _engine._device,
-            static_cast<VkDeviceSize>(uploadSize),
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            staging);
-        if (r != VK_SUCCESS)
-            continue;
-
-        // Decode the mip into a temporary 16-bit buffer; _dFormat is already
-        // correctly set on mipCopy so LoadPaaBin16's assertion passes.
-        std::vector<char> pixelData(dataSize);
-        int ok = _src->GetMipmapData(pixelData.data(), mip, i);
-        if (!ok)
-            std::memset(pixelData.data(), 0, dataSize);
-
-        // Transcode pixels to Vulkan-compatible RGBA8 layout when required.
-        //   ARGB4444: bits 15-12=A, 11-8=R, 7-4=G, 3-0=B  → [R8,G8,B8,A8]
-        //   ARGB1555: bit15=A, 14-10=R, 9-5=G, 4-0=B       → [R8,G8,B8,A8]
-        //   ARGB8888: raw bytes [B,G,R,A]                   → [R8,G8,B8,A8]
-        // All output as VK_FORMAT_R8G8B8A8_UNORM.
-        std::vector<char> transcodedData;
-        const void* uploadPtr = pixelData.data();
+        const std::size_t pixelCount = static_cast<std::size_t>(srcMip._w) * srcMip._h;
+        std::vector<std::uint8_t> transcodedPixels;
+        const void* uploadPixels = sourcePixels.data();
+        std::size_t uploadSize = sourcePixels.size();
         if (needsTranscode)
         {
-            transcodedData.resize(uploadSize);
-            uint8_t* dst8 = reinterpret_cast<uint8_t*>(transcodedData.data());
-            if (transcode4444)
+            transcodedPixels.resize(pixelCount * 4);
+            auto* dst = transcodedPixels.data();
+            if (transcode4444 || transcode1555)
             {
-                const uint16_t* src16 = reinterpret_cast<const uint16_t*>(pixelData.data());
-                for (std::size_t p = 0; p < pixelCount; ++p)
+                const auto* src = reinterpret_cast<const std::uint16_t*>(sourcePixels.data());
+                for (std::size_t pixel = 0; pixel < pixelCount; ++pixel)
                 {
-                    uint16_t px = src16[p];
-                    uint8_t  a  = (px >> 12) & 0xF;
-                    uint8_t  rv = (px >> 8)  & 0xF;
-                    uint8_t  g  = (px >> 4)  & 0xF;
-                    uint8_t  b  =  px        & 0xF;
-                    // Expand 4-bit channels to 8-bit by replicating the nibble.
-                    dst8[p * 4 + 0] = (rv << 4) | rv;
-                    dst8[p * 4 + 1] = (g  << 4) | g;
-                    dst8[p * 4 + 2] = (b  << 4) | b;
-                    dst8[p * 4 + 3] = (a  << 4) | a;
-                }
-            }
-            else if (transcode1555)
-            {
-                const uint16_t* src16 = reinterpret_cast<const uint16_t*>(pixelData.data());
-                for (std::size_t p = 0; p < pixelCount; ++p)
-                {
-                    uint16_t px = src16[p];
-                    uint8_t  a  = (px >> 15) & 0x1;
-                    uint8_t  rv = (px >> 10) & 0x1F;
-                    uint8_t  g  = (px >> 5)  & 0x1F;
-                    uint8_t  b  =  px        & 0x1F;
-                    // Expand 5-bit channels (and 1-bit alpha) to 8-bit.
-                    dst8[p * 4 + 0] = (rv << 3) | (rv >> 2);
-                    dst8[p * 4 + 1] = (g  << 3) | (g  >> 2);
-                    dst8[p * 4 + 2] = (b  << 3) | (b  >> 2);
-                    dst8[p * 4 + 3] = a ? 255u : 0u;
+                    const std::uint16_t value = src[pixel];
+                    if (transcode4444)
+                    {
+                        dst[pixel * 4] = ((value >> 8) & 15) * 17;
+                        dst[pixel * 4 + 1] = ((value >> 4) & 15) * 17;
+                        dst[pixel * 4 + 2] = (value & 15) * 17;
+                        dst[pixel * 4 + 3] = ((value >> 12) & 15) * 17;
+                    }
+                    else
+                    {
+                        dst[pixel * 4] = ((value >> 10) & 31) * 255 / 31;
+                        dst[pixel * 4 + 1] = ((value >> 5) & 31) * 255 / 31;
+                        dst[pixel * 4 + 2] = (value & 31) * 255 / 31;
+                        dst[pixel * 4 + 3] = (value & 0x8000) ? 255 : 0;
+                    }
                 }
             }
             else if (transcodeAI88)
             {
-                // [grey8, alpha8] → [grey8, grey8, grey8, alpha8]
-                const uint8_t* src8 = reinterpret_cast<const uint8_t*>(pixelData.data());
-                for (std::size_t p = 0; p < pixelCount; ++p)
+                for (std::size_t pixel = 0; pixel < pixelCount; ++pixel)
                 {
-                    const uint8_t grey  = src8[p * 2 + 0];
-                    const uint8_t alpha = src8[p * 2 + 1];
-                    dst8[p * 4 + 0] = grey;
-                    dst8[p * 4 + 1] = grey;
-                    dst8[p * 4 + 2] = grey;
-                    dst8[p * 4 + 3] = alpha;
+                    dst[pixel * 4] = sourcePixels[pixel * 2];
+                    dst[pixel * 4 + 1] = sourcePixels[pixel * 2];
+                    dst[pixel * 4 + 2] = sourcePixels[pixel * 2];
+                    dst[pixel * 4 + 3] = sourcePixels[pixel * 2 + 1];
                 }
             }
-            else // transcode8888: raw bytes [B,G,R,A] → [R,G,B,A]
+            else
             {
-                const uint8_t* src8 = reinterpret_cast<const uint8_t*>(pixelData.data());
-                for (std::size_t p = 0; p < pixelCount; ++p)
+                for (std::size_t pixel = 0; pixel < pixelCount; ++pixel)
                 {
-                    dst8[p * 4 + 0] = src8[p * 4 + 2]; // R
-                    dst8[p * 4 + 1] = src8[p * 4 + 1]; // G
-                    dst8[p * 4 + 2] = src8[p * 4 + 0]; // B
-                    dst8[p * 4 + 3] = src8[p * 4 + 3]; // A
+                    dst[pixel * 4] = sourcePixels[pixel * 4 + 2];
+                    dst[pixel * 4 + 1] = sourcePixels[pixel * 4 + 1];
+                    dst[pixel * 4 + 2] = sourcePixels[pixel * 4];
+                    dst[pixel * 4 + 3] = sourcePixels[pixel * 4 + 3];
                 }
             }
-            uploadPtr = transcodedData.data();
+            uploadPixels = transcodedPixels.data();
+            uploadSize = transcodedPixels.size();
         }
 
-        vk::UploadMappedBuffer(staging, uploadPtr, uploadSize);
-
-        // Copy staging buffer → device image mip i
-        vk::CopyBufferToImage(_engine._device, _engine._commandPool, _engine._graphicsQueue,
-                              staging.buffer, _image.image,
-                              static_cast<uint32_t>(mip._w), static_cast<uint32_t>(mip._h),
-                              static_cast<uint32_t>(i));
-
-        vk::DestroyBuffer(_engine._device, staging);
+        PendingMipUpload upload;
+        if (vk::CreateHostVisibleBuffer(_engine._physicalDevice, _engine._device,
+                                        static_cast<VkDeviceSize>(uploadSize),
+                                        VK_BUFFER_USAGE_TRANSFER_SRC_BIT, upload.staging) != VK_SUCCESS)
+            continue;
+        vk::UploadMappedBuffer(upload.staging, uploadPixels, uploadSize);
+        upload.mipLevel = level;
+        upload.width = static_cast<std::uint32_t>(srcMip._w);
+        upload.height = static_cast<std::uint32_t>(srcMip._h);
+        _pendingMipUploads.push_back(upload);
     }
 
-    // -----------------------------------------------------------------------
-    // Generate missing mip levels + finalize layout
-    // -----------------------------------------------------------------------
-    // File mips are now in TRANSFER_DST_OPTIMAL.  Non-DXT textures may need
-    // the remaining levels generated via vkCmdBlitImage.  After that (or
-    // immediately if no generation is needed) everything transitions to
-    // VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL.
+    if (_pendingMipUploads.empty())
+        return false;
+    const bool canGenerateMips = _nativeSrcFormat != PacDXT1 && _nativeSrcFormat != PacDXT2 &&
+                                 _nativeSrcFormat != PacDXT3 && _nativeSrcFormat != PacDXT4 &&
+                                 _nativeSrcFormat != PacDXT5;
+    if (canGenerateMips)
+        _nMipmaps = static_cast<int>(std::bit_width(std::max(static_cast<std::uint32_t>(_w), static_cast<std::uint32_t>(_h))));
+    _initialUploadPending = true;
+    _gpuReadyForSampling = false;
+    _engine.QueueTextureUpload(this);
+    return true;
+}
 
-    const bool canGenerate = (sharedFmt != PacDXT1 && sharedFmt != PacDXT2 &&
-                              sharedFmt != PacDXT3 && sharedFmt != PacDXT4 &&
-                              sharedFmt != PacDXT5);
-    const uint32_t fullMipCount = static_cast<uint32_t>(canGenerate
-        ? std::bit_width(std::max(static_cast<uint32_t>(_w), static_cast<uint32_t>(_h)))
-        : _nMipmaps);
-    const uint32_t fileMipCount = static_cast<uint32_t>(_nMipmaps);
+bool TextureVK::QueueDynamicUpload(const void* rgba, std::uint32_t size)
+{
+    if (!_image.image || !rgba || size == 0)
+        return false;
 
-    if (fullMipCount <= fileMipCount)
-    {
-        // No generation needed — just transition file mips to SHADER_READ_ONLY.
-        vk::TransitionImageLayout(_engine._device, _engine._commandPool, _engine._graphicsQueue,
-                                  _image.image, fileMipCount,
-                                  VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                  VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        return true;
-    }
+    // A dynamic texture can be updated repeatedly before the frame command
+    // buffer is built. Only the latest CPU contents need copying. Retire the
+    // replaced staging buffer through the same fence-owned path so texture
+    // resource destruction has one lifetime rule.
+    for (PendingMipUpload& upload : _pendingMipUploads)
+        _engine.RetireTextureStaging(upload.staging);
+    _pendingMipUploads.clear();
 
-    // Need to generate missing mip levels via blit.
-    _nMipmaps = static_cast<int>(fullMipCount);
+    PendingMipUpload upload;
+    if (vk::CreateHostVisibleBuffer(_engine._physicalDevice, _engine._device, size,
+                                    VK_BUFFER_USAGE_TRANSFER_SRC_BIT, upload.staging) != VK_SUCCESS)
+        return false;
+    vk::UploadMappedBuffer(upload.staging, rgba, size);
+    upload.width = static_cast<std::uint32_t>(_w);
+    upload.height = static_cast<std::uint32_t>(_h);
+    _pendingMipUploads.push_back(upload);
+    _initialUploadPending = !_imageLayoutInitialized;
+    _fileMipCount = 1;
+    _gpuReadyForSampling = false;
+    _engine.QueueTextureUpload(this);
+    return true;
+}
 
-    VkCommandBuffer cb;
-    VkCommandBufferAllocateInfo allocInfo{};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.commandPool = _engine._commandPool;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = 1;
-    vkAllocateCommandBuffers(_engine._device, &allocInfo, &cb);
+bool TextureVK::RecordPendingUpload(VkCommandBuffer commandBuffer)
+{
+    if (!commandBuffer || !_image.image || _pendingMipUploads.empty())
+        return false;
 
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(cb, &beginInfo);
-
-    // Helper lambda: pipeline barrier to transition a range of mip levels
-    auto imageBarrier = [&](VkPipelineStageFlags srcMask, VkPipelineStageFlags dstMask,
-                            uint32_t baseMip, uint32_t mipCount,
-                            VkImageLayout oldLayout, VkImageLayout newLayout)
+    const auto imageBarrier = [&](VkPipelineStageFlags srcStage, VkPipelineStageFlags dstStage,
+                                  VkAccessFlags srcAccess, VkAccessFlags dstAccess,
+                                  std::uint32_t baseMip, std::uint32_t mipCount,
+                                  VkImageLayout oldLayout, VkImageLayout newLayout)
     {
         VkImageMemoryBarrier barrier{};
         barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -515,88 +399,118 @@ bool TextureVK::UploadMips()
         barrier.subresourceRange.levelCount = mipCount;
         barrier.subresourceRange.baseArrayLayer = 0;
         barrier.subresourceRange.layerCount = 1;
-        barrier.srcAccessMask = 0;
-        barrier.dstAccessMask = 0;
-        vkCmdPipelineBarrier(cb, srcMask, dstMask, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        barrier.srcAccessMask = srcAccess;
+        barrier.dstAccessMask = dstAccess;
+        vkCmdPipelineBarrier(commandBuffer, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
     };
 
-    // Transition file mips from TRANSFER_DST to TRANSFER_SRC for blit source
-    imageBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                 0, fileMipCount,
-                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    const std::uint32_t fullMipCount = _image.mipLevels;
+    const std::uint32_t fileMipCount = std::min(_fileMipCount, fullMipCount);
+    const bool generateMips = _initialUploadPending && fullMipCount > fileMipCount;
+    const VkImageLayout priorLayout = _initialUploadPending ? VK_IMAGE_LAYOUT_UNDEFINED
+                                                              : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    const VkPipelineStageFlags priorStage = _initialUploadPending ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
+                                                                    : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    const VkAccessFlags priorAccess = _initialUploadPending ? 0 : VK_ACCESS_SHADER_READ_BIT;
 
-    int srcW = _w, srcH = _h;
-    for (uint32_t skip = 1; skip < fileMipCount; ++skip) { srcW = std::max(srcW / 2, 1); srcH = std::max(srcH / 2, 1); }
-
-    for (uint32_t i = fileMipCount; i < fullMipCount; ++i)
+    imageBarrier(priorStage, VK_PIPELINE_STAGE_TRANSFER_BIT, priorAccess, VK_ACCESS_TRANSFER_WRITE_BIT,
+                 0, _initialUploadPending ? fileMipCount : 1,
+                 priorLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    for (const PendingMipUpload& upload : _pendingMipUploads)
     {
-        int dstW = std::max(srcW / 2, 1);
-        int dstH = std::max(srcH / 2, 1);
-
-        VkImageBlit blit{};
-        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        blit.srcSubresource.mipLevel = i - 1;
-        blit.srcSubresource.baseArrayLayer = 0;
-        blit.srcSubresource.layerCount = 1;
-        blit.srcOffsets[0] = {0, 0, 0};
-        blit.srcOffsets[1] = {srcW, srcH, 1};
-        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        blit.dstSubresource.mipLevel = i;
-        blit.dstSubresource.baseArrayLayer = 0;
-        blit.dstSubresource.layerCount = 1;
-        blit.dstOffsets[0] = {0, 0, 0};
-        blit.dstOffsets[1] = {dstW, dstH, 1};
-
-        // Transition destination mip UNDEFINED → TRANSFER_DST
-        imageBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                     i, 1,
-                     VK_IMAGE_LAYOUT_UNDEFINED,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
-        vkCmdBlitImage(cb, _image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       _image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       1, &blit, VK_FILTER_LINEAR);
-
-        // Transition this mip to TRANSFER_SRC so it can be used as source for the next level
-        if (i < fullMipCount - 1)
-        {
-            imageBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         i, 1,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-        }
-
-        srcW = dstW;
-        srcH = dstH;
+        VkBufferImageCopy region{};
+        region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        region.imageSubresource.mipLevel = upload.mipLevel;
+        region.imageSubresource.baseArrayLayer = 0;
+        region.imageSubresource.layerCount = 1;
+        region.imageExtent = {upload.width, upload.height, 1};
+        vkCmdCopyBufferToImage(commandBuffer, upload.staging.buffer, _image.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
     }
 
-    // Every level except the final generated one was used as a blit source.
-    // The final level remains TRANSFER_DST because nothing consumes it as a source.
-    imageBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                 0, fullMipCount - 1,
-                 VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    imageBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                 fullMipCount - 1, 1,
-                 VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                 VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    if (generateMips)
+    {
+        imageBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                     0, fileMipCount, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        int srcW = _w;
+        int srcH = _h;
+        for (std::uint32_t level = 1; level < fileMipCount; ++level)
+        {
+            srcW = std::max(srcW / 2, 1);
+            srcH = std::max(srcH / 2, 1);
+        }
+        for (std::uint32_t level = fileMipCount; level < fullMipCount; ++level)
+        {
+            const int dstW = std::max(srcW / 2, 1);
+            const int dstH = std::max(srcH / 2, 1);
+            imageBarrier(VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, VK_ACCESS_TRANSFER_WRITE_BIT, level, 1,
+                         VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            VkImageBlit blit{};
+            blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.srcSubresource.mipLevel = level - 1;
+            blit.srcSubresource.layerCount = 1;
+            blit.srcOffsets[1] = {srcW, srcH, 1};
+            blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.dstSubresource.mipLevel = level;
+            blit.dstSubresource.layerCount = 1;
+            blit.dstOffsets[1] = {dstW, dstH, 1};
+            vkCmdBlitImage(commandBuffer, _image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           _image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+            if (level + 1 < fullMipCount)
+            {
+                imageBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, level, 1,
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            }
+            srcW = dstW;
+            srcH = dstH;
+        }
+        imageBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_SHADER_READ_BIT, 0, fullMipCount - 1,
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        imageBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT, fullMipCount - 1, 1,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    else
+    {
+        imageBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+                     0, _initialUploadPending ? fileMipCount : 1,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
 
-    vkEndCommandBuffer(cb);
-
-    VkSubmitInfo submitInfo{};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cb;
-    vkQueueSubmit(_engine._graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-    vkQueueWaitIdle(_engine._graphicsQueue);
-    vkFreeCommandBuffers(_engine._device, _engine._commandPool, 1, &cb);
+    // This command buffer records transfers before every scene draw, so its
+    // descriptor is safe to bind later in this same command buffer. Ownership
+    // and final layout state still remain pending until queue submission.
+    _uploadRecorded = true;
     return true;
+}
+
+void TextureVK::CommitPendingUpload(std::vector<vk::BufferVK>& inFlightStaging)
+{
+    for (PendingMipUpload& upload : _pendingMipUploads)
+        inFlightStaging.push_back(upload.staging);
+    _pendingMipUploads.clear();
+    _initialUploadPending = false;
+    _uploadRecorded = false;
+    _imageLayoutInitialized = true;
+    // The submitted transfer precedes every main-scene draw on this graphics
+    // queue; later same-queue shadow submissions can sample it as well.
+    _gpuReadyForSampling = true;
+}
+
+void TextureVK::DiscardPendingUpload() noexcept
+{
+    _uploadRecorded = false;
 }
 
 VkDescriptorSet TextureVK::GetDescriptorSet() const
 {
-    if (_descriptorSet)
+    if (_descriptorSet && (_gpuReadyForSampling || _uploadRecorded || _resourceId == kFallbackResourceId))
         return _descriptorSet;
     if (_engine._fallbackWhiteTexture)
         return _engine._fallbackWhiteTexture->_descriptorSet;
@@ -606,6 +520,8 @@ VkDescriptorSet TextureVK::GetDescriptorSet() const
 VkDescriptorSet TextureVK::GetDescriptorSet(std::uint32_t samplerFilter, std::uint32_t samplerClamp) const
 {
     const std::uint32_t key = ((samplerFilter & 1u) << 2) | (samplerClamp & 3u);
+    if (!_gpuReadyForSampling && !_uploadRecorded && _resourceId != kFallbackResourceId)
+        return GetDescriptorSet();
     if (!_image.view || !_engine._device || !_engine._textureDescriptorPool)
         return GetDescriptorSet();
     if (key == _baseSamplerKey)
@@ -699,17 +615,17 @@ AlphaStats::Kind TextureVK::GetAlphaClass()
 
         if (hasAlpha && !oneBit)
         {
-            QIFStream in;
-            GFileServer->Open(in, Name());
-            const int size = in.fail() ? 0 : in.rest();
+            QIFStream input;
+            GFileServer->Open(input, Name());
+            const int size = input.fail() ? 0 : input.rest();
             if (size > 0)
             {
-                std::vector<char> fileData(static_cast<std::size_t>(size));
-                in.read(fileData.data(), size);
+                std::vector<std::uint8_t> sourceBytes(static_cast<std::size_t>(size));
+                input.read(reinterpret_cast<char*>(sourceBytes.data()), size);
                 const char* name = Name();
                 const std::size_t len = name ? std::strlen(name) : 0;
                 const bool isPaa = len >= 4 && (name[len - 1] == 'a' || name[len - 1] == 'A');
-                const DecodedImage image = DecodePAABuffer(fileData.data(), fileData.size(), isPaa);
+                const DecodedImage image = DecodePAABuffer(sourceBytes.data(), sourceBytes.size(), isPaa);
                 if (image.valid())
                 {
                     decoded = ClassifyAlpha(image.rgba.data(), image.rgba.size() / 4);

@@ -36,7 +36,7 @@ TEST_CASE("Vulkan GPU scene ABI matches Vulkan indirect commands", "[vulkan][gpu
 
 TEST_CASE("Vulkan GPU shadow ABI carries indirect base-instance data", "[vulkan][gpu-shadow]")
 {
-    STATIC_REQUIRE(sizeof(Poseidon::vk::GpuShadowInstanceVK) == 112);
+    STATIC_REQUIRE(sizeof(Poseidon::vk::GpuShadowInstanceVK) == 128);
     STATIC_REQUIRE(offsetof(Poseidon::vk::GpuShadowInstanceVK, world) == 16);
     STATIC_REQUIRE(offsetof(Poseidon::vk::GpuShadowInstanceVK, alphaCutoff) == 100);
     STATIC_REQUIRE(sizeof(Poseidon::vk::GpuShadowBatchVK) == 32);

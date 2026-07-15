@@ -1,7 +1,3 @@
-# Implementation Direction
-
-For agreed renderer and gameplay goals, implement toward the complete target architecture rather than repeatedly tuning temporary placeholders.
-
 - Identify the reference implementation and the required data flow, resources, synchronization, and validation before editing.
 - Do not present a visual approximation as completion when it cannot satisfy the agreed behavior.
 - Use temporary fallbacks only to keep the build runnable or when the user explicitly requests an experiment; label them clearly and schedule their removal.
