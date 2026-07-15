@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -87,6 +88,22 @@ constexpr const char kShadowAlphaVertSrc[] =
 
 constexpr const char kShadowAlphaFragSrc[] =
 #include <PoseidonVK/Shaders/shadowDepthAlpha.frag.glsl.hpp>
+;
+
+constexpr const char kShadowCullComputeSrc[] =
+#include <PoseidonVK/Shaders/shadow_cull.comp.glsl.hpp>
+;
+
+constexpr const char kShadowGpuDepthVertSrc[] =
+#include <PoseidonVK/Shaders/shadowDepthGpu.vert.glsl.hpp>
+;
+
+constexpr const char kShadowGpuAlphaVertSrc[] =
+#include <PoseidonVK/Shaders/shadowDepthGpuAlpha.vert.glsl.hpp>
+;
+
+constexpr const char kShadowGpuAlphaFragSrc[] =
+#include <PoseidonVK/Shaders/shadowDepthGpuAlpha.frag.glsl.hpp>
 ;
 } // namespace
 
@@ -422,6 +439,12 @@ bool EngineVK::EnsureShadowResources(int res, int layers)
     }
 
     // 7. Shadow depth pipelines (solid + alpha)
+    if (!CreateGpuShadowResources())
+    {
+        // GPU CSM is optional. The established direct renderer remains valid
+        // when the device has no draw-parameter tier or allocation fails.
+        DestroyGpuShadowResources();
+    }
     if (!CreateShadowDepthPipeline())
     {
         DestroyShadowResources();
@@ -450,6 +473,294 @@ bool EngineVK::EnsureShadowResources(int res, int layers)
 // ---------------------------------------------------------------------------
 // CreateShadowDepthPipeline
 // ---------------------------------------------------------------------------
+
+bool EngineVK::CreateGpuShadowResources()
+{
+    if (!_gpuSceneCapabilities.GpuDrivenAvailable())
+        return true;
+
+    const VkDescriptorSetLayoutBinding bindings[] = {
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT | VK_SHADER_STAGE_VERTEX_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = static_cast<std::uint32_t>(std::size(bindings));
+    layoutInfo.pBindings = bindings;
+    if (vkCreateDescriptorSetLayout(_device, &layoutInfo, nullptr, &_gpuShadowDescriptorSetLayout) != VK_SUCCESS)
+        return false;
+
+    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3};
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    if (vkCreateDescriptorPool(_device, &poolInfo, nullptr, &_gpuShadowDescriptorPool) != VK_SUCCESS)
+    {
+        DestroyGpuShadowResources();
+        return false;
+    }
+    VkDescriptorSetAllocateInfo allocateInfo{};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocateInfo.descriptorPool = _gpuShadowDescriptorPool;
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &_gpuShadowDescriptorSetLayout;
+    if (vkAllocateDescriptorSets(_device, &allocateInfo, &_gpuShadowDescriptorSet) != VK_SUCCESS)
+    {
+        DestroyGpuShadowResources();
+        return false;
+    }
+
+    VkPushConstantRange cullRange{};
+    cullRange.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    cullRange.size = sizeof(float) * 16 + sizeof(std::uint32_t) * 5;
+    VkPipelineLayoutCreateInfo cullLayoutInfo{};
+    cullLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    cullLayoutInfo.setLayoutCount = 1;
+    cullLayoutInfo.pSetLayouts = &_gpuShadowDescriptorSetLayout;
+    cullLayoutInfo.pushConstantRangeCount = 1;
+    cullLayoutInfo.pPushConstantRanges = &cullRange;
+    if (vkCreatePipelineLayout(_device, &cullLayoutInfo, nullptr, &_gpuShadowCullPipelineLayout) != VK_SUCCESS)
+    {
+        DestroyGpuShadowResources();
+        return false;
+    }
+
+    std::vector<std::uint32_t> spirv;
+    std::string error;
+    if (!CompileShader(kShadowCullComputeSrc, 5, spirv, error))
+    {
+        LOG_WARN(Graphics, "VK shadow: GPU culler compile failed; using direct caster submission: {}", error);
+        DestroyGpuShadowResources();
+        return false;
+    }
+    VkShaderModuleCreateInfo moduleInfo{};
+    moduleInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    moduleInfo.codeSize = spirv.size() * sizeof(std::uint32_t);
+    moduleInfo.pCode = spirv.data();
+    VkShaderModule module = VK_NULL_HANDLE;
+    if (vkCreateShaderModule(_device, &moduleInfo, nullptr, &module) != VK_SUCCESS)
+    {
+        DestroyGpuShadowResources();
+        return false;
+    }
+    VkComputePipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipelineInfo.stage.module = module;
+    pipelineInfo.stage.pName = "main";
+    pipelineInfo.layout = _gpuShadowCullPipelineLayout;
+    const VkResult result = vkCreateComputePipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                                     &_gpuShadowCullPipeline);
+    vkDestroyShaderModule(_device, module, nullptr);
+    if (result != VK_SUCCESS || !EnsureGpuShadowCapacity(64, 64))
+    {
+        DestroyGpuShadowResources();
+        return false;
+    }
+    _gpuShadowEnabled = true;
+
+    const auto makeModule = [&](const char* source, int stage, VkShaderModule& output, const char* name) -> bool
+    {
+        std::vector<std::uint32_t> shaderSpirv;
+        std::string shaderError;
+        if (!CompileShader(source, stage, shaderSpirv, shaderError))
+        {
+            LOG_WARN(Graphics, "VK shadow: {} compile failed: {}", name, shaderError);
+            return false;
+        }
+        VkShaderModuleCreateInfo shaderInfo{};
+        shaderInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        shaderInfo.codeSize = shaderSpirv.size() * sizeof(std::uint32_t);
+        shaderInfo.pCode = shaderSpirv.data();
+        return vkCreateShaderModule(_device, &shaderInfo, nullptr, &output) == VK_SUCCESS;
+    };
+    constexpr int kVertex = 0;
+    constexpr int kFragment = 4;
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_FRONT_BIT;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineColorBlendStateCreateInfo cb{};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    const VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{};
+    dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = static_cast<std::uint32_t>(std::size(dynamicStates));
+    dyn.pDynamicStates = dynamicStates;
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    // GPU shadow pipelines have a distinct set-0 SSBO ABI. This keeps the
+    // direct fallback's per-caster push constants intact on lower capability
+    // devices while indirect draws fetch transforms by base instance.
+    VkPushConstantRange gpuPcRange{};
+    gpuPcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    gpuPcRange.size = sizeof(float) * 16;
+    VkPipelineLayoutCreateInfo gpuLayoutInfo{};
+    gpuLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    gpuLayoutInfo.setLayoutCount = 1;
+    gpuLayoutInfo.pSetLayouts = &_gpuShadowDescriptorSetLayout;
+    gpuLayoutInfo.pushConstantRangeCount = 1;
+    gpuLayoutInfo.pPushConstantRanges = &gpuPcRange;
+    if (vkCreatePipelineLayout(_device, &gpuLayoutInfo, nullptr, &_gpuShadowDepthPipelineLayout) != VK_SUCCESS)
+        return false;
+
+    const VkDescriptorSetLayout alphaLayouts[] = {_gpuShadowDescriptorSetLayout, _textureDescriptorSetLayout};
+    gpuLayoutInfo.setLayoutCount = 2;
+    gpuLayoutInfo.pSetLayouts = alphaLayouts;
+    if (vkCreatePipelineLayout(_device, &gpuLayoutInfo, nullptr, &_gpuShadowAlphaPipelineLayout) != VK_SUCCESS)
+        return false;
+
+    VkShaderModule gpuSolidModule = VK_NULL_HANDLE;
+    VkShaderModule gpuAlphaVertexModule = VK_NULL_HANDLE;
+    VkShaderModule gpuAlphaFragmentModule = VK_NULL_HANDLE;
+    if (!makeModule(kShadowGpuDepthVertSrc, kVertex, gpuSolidModule, "shadowDepthGpu.vert") ||
+        !makeModule(kShadowGpuAlphaVertSrc, kVertex, gpuAlphaVertexModule, "shadowDepthGpuAlpha.vert") ||
+        !makeModule(kShadowGpuAlphaFragSrc, kFragment, gpuAlphaFragmentModule, "shadowDepthGpuAlpha.frag"))
+    {
+        if (gpuSolidModule) vkDestroyShaderModule(_device, gpuSolidModule, nullptr);
+        if (gpuAlphaVertexModule) vkDestroyShaderModule(_device, gpuAlphaVertexModule, nullptr);
+        if (gpuAlphaFragmentModule) vkDestroyShaderModule(_device, gpuAlphaFragmentModule, nullptr);
+        return false;
+    }
+
+    const VkVertexInputBindingDescription gpuBind = vk::MakeSceneVertexBindingDescription();
+    const VkVertexInputAttributeDescription gpuPosition = vk::MakeSceneVertexPositionAttribute();
+    VkPipelineVertexInputStateCreateInfo gpuSolidInput{};
+    gpuSolidInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    gpuSolidInput.vertexBindingDescriptionCount = 1;
+    gpuSolidInput.pVertexBindingDescriptions = &gpuBind;
+    gpuSolidInput.vertexAttributeDescriptionCount = 1;
+    gpuSolidInput.pVertexAttributeDescriptions = &gpuPosition;
+    VkPipelineShaderStageCreateInfo gpuSolidStage{};
+    gpuSolidStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    gpuSolidStage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    gpuSolidStage.module = gpuSolidModule;
+    gpuSolidStage.pName = "main";
+    VkGraphicsPipelineCreateInfo gpuPipelineInfo{};
+    gpuPipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gpuPipelineInfo.stageCount = 1;
+    gpuPipelineInfo.pStages = &gpuSolidStage;
+    gpuPipelineInfo.pVertexInputState = &gpuSolidInput;
+    gpuPipelineInfo.pInputAssemblyState = &ia;
+    gpuPipelineInfo.pViewportState = &vp;
+    gpuPipelineInfo.pRasterizationState = &rs;
+    gpuPipelineInfo.pMultisampleState = &ms;
+    gpuPipelineInfo.pDepthStencilState = &ds;
+    gpuPipelineInfo.pColorBlendState = &cb;
+    gpuPipelineInfo.pDynamicState = &dyn;
+    gpuPipelineInfo.layout = _gpuShadowDepthPipelineLayout;
+    gpuPipelineInfo.renderPass = _shadowRenderPass;
+    if (vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &gpuPipelineInfo, nullptr,
+                                  &_gpuShadowDepthPipeline) != VK_SUCCESS)
+    {
+        vkDestroyShaderModule(_device, gpuSolidModule, nullptr);
+        vkDestroyShaderModule(_device, gpuAlphaVertexModule, nullptr);
+        vkDestroyShaderModule(_device, gpuAlphaFragmentModule, nullptr);
+        return false;
+    }
+
+    const VkVertexInputAttributeDescription gpuAlphaAttributes[] = {
+        vk::MakeSceneVertexPositionAttribute(), vk::MakeSceneVertexTexcoordAttribute()};
+    VkPipelineVertexInputStateCreateInfo gpuAlphaInput = gpuSolidInput;
+    gpuAlphaInput.vertexAttributeDescriptionCount = 2;
+    gpuAlphaInput.pVertexAttributeDescriptions = gpuAlphaAttributes;
+    VkPipelineRasterizationStateCreateInfo gpuAlphaRaster = rs;
+    gpuAlphaRaster.cullMode = VK_CULL_MODE_NONE;
+    VkPipelineShaderStageCreateInfo gpuAlphaStages[2]{};
+    gpuAlphaStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    gpuAlphaStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    gpuAlphaStages[0].module = gpuAlphaVertexModule;
+    gpuAlphaStages[0].pName = "main";
+    gpuAlphaStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    gpuAlphaStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    gpuAlphaStages[1].module = gpuAlphaFragmentModule;
+    gpuAlphaStages[1].pName = "main";
+    gpuPipelineInfo.stageCount = 2;
+    gpuPipelineInfo.pStages = gpuAlphaStages;
+    gpuPipelineInfo.pVertexInputState = &gpuAlphaInput;
+    gpuPipelineInfo.pRasterizationState = &gpuAlphaRaster;
+    gpuPipelineInfo.layout = _gpuShadowAlphaPipelineLayout;
+    const VkResult gpuAlphaResult = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &gpuPipelineInfo, nullptr,
+                                                               &_gpuShadowAlphaPipeline);
+    vkDestroyShaderModule(_device, gpuSolidModule, nullptr);
+    vkDestroyShaderModule(_device, gpuAlphaVertexModule, nullptr);
+    vkDestroyShaderModule(_device, gpuAlphaFragmentModule, nullptr);
+    if (gpuAlphaResult != VK_SUCCESS)
+        return false;
+    return true;
+}
+
+bool EngineVK::EnsureGpuShadowCapacity(std::size_t instanceCount, std::size_t batchCount)
+{
+    if (!_gpuShadowDescriptorSet || !_device || !_physicalDevice)
+        return false;
+    const std::size_t requiredInstances = std::max<std::size_t>(instanceCount, 1);
+    const std::size_t requiredBatches = std::max<std::size_t>(batchCount, 1);
+    if (requiredInstances > _gpuShadowInstanceCapacity || requiredBatches > _gpuShadowBatchCapacity)
+    {
+        vkDeviceWaitIdle(_device);
+        const std::size_t newInstances = std::max(requiredInstances, std::max<std::size_t>(64, _gpuShadowInstanceCapacity * 2));
+        const std::size_t newBatches = std::max(requiredBatches, std::max<std::size_t>(64, _gpuShadowBatchCapacity * 2));
+        vk::BufferVK instances, indirect, counts;
+        if (vk::CreateHostVisibleBuffer(_physicalDevice, _device, newInstances * sizeof(vk::GpuShadowInstanceVK),
+                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, instances) != VK_SUCCESS ||
+            vk::CreateDeviceLocalBuffer(_physicalDevice, _device,
+                                        newInstances * kShadowCascades * sizeof(VkDrawIndexedIndirectCommand),
+                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT, indirect) != VK_SUCCESS ||
+            vk::CreateDeviceLocalBuffer(_physicalDevice, _device, newBatches * kShadowCascades * sizeof(std::uint32_t),
+                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT, counts) != VK_SUCCESS)
+        {
+            vk::DestroyBuffer(_device, instances);
+            vk::DestroyBuffer(_device, indirect);
+            vk::DestroyBuffer(_device, counts);
+            return false;
+        }
+        vk::DestroyBuffer(_device, _gpuShadowInstancesBuffer);
+        vk::DestroyBuffer(_device, _gpuShadowIndirectBuffer);
+        vk::DestroyBuffer(_device, _gpuShadowCountBuffer);
+        _gpuShadowInstancesBuffer = instances;
+        _gpuShadowIndirectBuffer = indirect;
+        _gpuShadowCountBuffer = counts;
+        _gpuShadowInstanceCapacity = newInstances;
+        _gpuShadowBatchCapacity = newBatches;
+    }
+    const VkDescriptorBufferInfo infos[] = {{_gpuShadowInstancesBuffer.buffer, 0, _gpuShadowInstancesBuffer.size},
+                                             {_gpuShadowCountBuffer.buffer, 0, _gpuShadowCountBuffer.size},
+                                             {_gpuShadowIndirectBuffer.buffer, 0, _gpuShadowIndirectBuffer.size}};
+    VkWriteDescriptorSet writes[3]{};
+    for (std::uint32_t i = 0; i < std::size(writes); ++i)
+    {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = _gpuShadowDescriptorSet;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[i].pBufferInfo = &infos[i];
+    }
+    vkUpdateDescriptorSets(_device, static_cast<std::uint32_t>(std::size(writes)), writes, 0, nullptr);
+    return true;
+}
 
 bool EngineVK::CreateShadowDepthPipeline()
 {
@@ -716,6 +1027,7 @@ void EngineVK::DestroyShadowResources()
 
     vkDeviceWaitIdle(_device);
     DestroyShadowRecordingContexts();
+    DestroyGpuShadowResources();
 
     if (_shadowAlphaPipeline)
     {
@@ -786,6 +1098,117 @@ void EngineVK::DestroyShadowResources()
     _shadowMapActive = false;
 }
 
+void EngineVK::DestroyGpuShadowResources()
+{
+    _gpuShadowEnabled = false;
+    _gpuShadowInstances.clear();
+    _gpuShadowBatches.clear();
+    vk::DestroyBuffer(_device, _gpuShadowInstancesBuffer);
+    vk::DestroyBuffer(_device, _gpuShadowIndirectBuffer);
+    vk::DestroyBuffer(_device, _gpuShadowCountBuffer);
+    _gpuShadowInstanceCapacity = 0;
+    _gpuShadowBatchCapacity = 0;
+    if (_gpuShadowAlphaPipeline)
+        vkDestroyPipeline(_device, _gpuShadowAlphaPipeline, nullptr);
+    if (_gpuShadowAlphaPipelineLayout)
+        vkDestroyPipelineLayout(_device, _gpuShadowAlphaPipelineLayout, nullptr);
+    if (_gpuShadowDepthPipeline)
+        vkDestroyPipeline(_device, _gpuShadowDepthPipeline, nullptr);
+    if (_gpuShadowDepthPipelineLayout)
+        vkDestroyPipelineLayout(_device, _gpuShadowDepthPipelineLayout, nullptr);
+    if (_gpuShadowCullPipeline)
+        vkDestroyPipeline(_device, _gpuShadowCullPipeline, nullptr);
+    if (_gpuShadowCullPipelineLayout)
+        vkDestroyPipelineLayout(_device, _gpuShadowCullPipelineLayout, nullptr);
+    if (_gpuShadowDescriptorPool)
+        vkDestroyDescriptorPool(_device, _gpuShadowDescriptorPool, nullptr);
+    if (_gpuShadowDescriptorSetLayout)
+        vkDestroyDescriptorSetLayout(_device, _gpuShadowDescriptorSetLayout, nullptr);
+    _gpuShadowAlphaPipeline = VK_NULL_HANDLE;
+    _gpuShadowAlphaPipelineLayout = VK_NULL_HANDLE;
+    _gpuShadowDepthPipeline = VK_NULL_HANDLE;
+    _gpuShadowDepthPipelineLayout = VK_NULL_HANDLE;
+    _gpuShadowCullPipeline = VK_NULL_HANDLE;
+    _gpuShadowCullPipelineLayout = VK_NULL_HANDLE;
+    _gpuShadowDescriptorPool = VK_NULL_HANDLE;
+    _gpuShadowDescriptorSet = VK_NULL_HANDLE;
+    _gpuShadowDescriptorSetLayout = VK_NULL_HANDLE;
+}
+
+void EngineVK::RecordGpuShadowCull(VkCommandBuffer commandBuffer, const float* lightVPs, std::uint32_t cascadeCount)
+{
+    if (!_gpuShadowEnabled || _gpuShadowInstances.empty() || _gpuShadowBatches.empty() || !lightVPs)
+        return;
+    const VkDeviceSize indirectBytes = static_cast<VkDeviceSize>(_gpuShadowInstanceCapacity) * cascadeCount *
+                                       sizeof(VkDrawIndexedIndirectCommand);
+    const VkDeviceSize countBytes = static_cast<VkDeviceSize>(_gpuShadowBatchCapacity) * cascadeCount * sizeof(std::uint32_t);
+    vkCmdFillBuffer(commandBuffer, _gpuShadowIndirectBuffer.buffer, 0, indirectBytes, 0);
+    vkCmdFillBuffer(commandBuffer, _gpuShadowCountBuffer.buffer, 0, countBytes, 0);
+
+    VkBufferMemoryBarrier before[3]{};
+    for (VkBufferMemoryBarrier& barrier : before)
+    {
+        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    }
+    before[0].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    before[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    before[0].buffer = _gpuShadowInstancesBuffer.buffer;
+    before[0].size = _gpuShadowInstancesBuffer.size;
+    before[1].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    before[1].buffer = _gpuShadowIndirectBuffer.buffer;
+    before[1].size = indirectBytes;
+    before[2].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    before[2].buffer = _gpuShadowCountBuffer.buffer;
+    before[2].size = countBytes;
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 3, before, 0, nullptr);
+
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _gpuShadowCullPipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _gpuShadowCullPipelineLayout, 0, 1,
+                            &_gpuShadowDescriptorSet, 0, nullptr);
+    struct ShadowCullConstants
+    {
+        float lightVP[16];
+        std::uint32_t instanceCount;
+        std::uint32_t batchCount;
+        std::uint32_t cascadeIndex;
+        std::uint32_t indirectStride;
+        std::uint32_t countStride;
+    } constants{};
+    static_assert(sizeof(ShadowCullConstants) == sizeof(float) * 16 + sizeof(std::uint32_t) * 5);
+    constants.instanceCount = static_cast<std::uint32_t>(_gpuShadowInstances.size());
+    constants.batchCount = static_cast<std::uint32_t>(_gpuShadowBatches.size());
+    constants.indirectStride = static_cast<std::uint32_t>(_gpuShadowInstanceCapacity);
+    constants.countStride = static_cast<std::uint32_t>(_gpuShadowBatchCapacity);
+    for (std::uint32_t cascade = 0; cascade < cascadeCount; ++cascade)
+    {
+        std::memcpy(constants.lightVP, lightVPs + cascade * 16, sizeof(constants.lightVP));
+        constants.cascadeIndex = cascade;
+        vkCmdPushConstants(commandBuffer, _gpuShadowCullPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(constants), &constants);
+        vkCmdDispatch(commandBuffer, (constants.instanceCount + 63u) / 64u, 1, 1);
+    }
+
+    VkBufferMemoryBarrier after[2]{};
+    for (VkBufferMemoryBarrier& barrier : after)
+    {
+        barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
+    }
+    after[0].buffer = _gpuShadowIndirectBuffer.buffer;
+    after[0].size = indirectBytes;
+    after[1].buffer = _gpuShadowCountBuffer.buffer;
+    after[1].size = countBytes;
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT,
+                         0, 0, nullptr, 2, after, 0, nullptr);
+}
+
 // ---------------------------------------------------------------------------
 // RenderShadowDepthScene
 // The legacy CPU-flattened caster API is intentionally not consumed by
@@ -838,6 +1261,7 @@ void EngineVK::RenderShadowDepthFramePlan(const render::frame::Frame& frame)
         std::uint32_t meshId = 0;
         std::uint32_t alphaTextureId = 0;
         bool alphaTested = false;
+        GfxMatrix world = {};
     };
 
     std::vector<ResolvedShadowDraw> resolvedDraws;
@@ -861,6 +1285,7 @@ void EngineVK::RenderShadowDepthFramePlan(const render::frame::Frame& frame)
         draw.alphaTested = command.alphaMode == render::frame::ShadowCasterAlphaMode::Cutout &&
                            _shadowAlphaPipeline != VK_NULL_HANDLE;
         draw.alphaTextureId = draw.alphaTested ? caster.alphaTexture.id : 0;
+        draw.world = caster.world;
         if (draw.alphaTested)
         {
             TextureVK* texture = ResolveTexture(draw.alphaTextureId);
@@ -919,6 +1344,8 @@ void EngineVK::RenderShadowDepthFramePlan(const render::frame::Frame& frame)
     _cpuShadowPrepareMs =
         std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - preparationStarted).count();
 
+    const bool gpuShadow = _gpuShadowEnabled && _gpuShadowCullPipeline && _gpuShadowDepthPipeline &&
+                           _gpuShadowAlphaPipeline;
     std::array<std::vector<const ResolvedShadowDraw*>, 4> visibleDraws;
     _shadowResolvedDrawCount = static_cast<std::uint32_t>(resolvedDraws.size());
     for (int cascadeIndex = 0; cascadeIndex < cascades.count; ++cascadeIndex)
@@ -934,6 +1361,65 @@ void EngineVK::RenderShadowDepthFramePlan(const render::frame::Frame& frame)
     // pools are reset, allowing all serial setup above to overlap it.
     if (_shadowInFlight)
         vkWaitForFences(_device, 1, &_shadowInFlight, VK_TRUE, UINT64_MAX);
+
+    if (gpuShadow)
+    {
+        _gpuShadowInstances.clear();
+        _gpuShadowBatches.clear();
+        _gpuShadowInstances.reserve(resolvedDraws.size());
+        _gpuShadowBatches.reserve(resolvedDraws.size());
+        for (const ResolvedShadowDraw& draw : resolvedDraws)
+        {
+            const bool append = !_gpuShadowBatches.empty() &&
+                                _gpuShadowBatches.back().meshId == draw.meshId &&
+                                _gpuShadowBatches.back().alphaTextureId == draw.alphaTextureId &&
+                                _gpuShadowBatches.back().alphaTested == (draw.alphaTested ? 1u : 0u);
+            if (!append)
+            {
+                vk::GpuShadowBatchVK batch;
+                batch.firstInstance = static_cast<std::uint32_t>(_gpuShadowInstances.size());
+                batch.indirectOffset = batch.firstInstance;
+                batch.countOffset = static_cast<std::uint32_t>(_gpuShadowBatches.size());
+                batch.meshId = draw.meshId;
+                batch.alphaTextureId = draw.alphaTextureId;
+                batch.alphaTested = draw.alphaTested ? 1u : 0u;
+                _gpuShadowBatches.push_back(batch);
+            }
+            vk::GpuShadowBatchVK& batch = _gpuShadowBatches.back();
+            vk::GpuShadowInstanceVK instance;
+            instance.localBoundsCenter[0] = draw.mesh->localBoundsCenter[0];
+            instance.localBoundsCenter[1] = draw.mesh->localBoundsCenter[1];
+            instance.localBoundsCenter[2] = draw.mesh->localBoundsCenter[2];
+            instance.localBoundsCenter[3] = draw.mesh->localBoundsRadius;
+            std::memcpy(instance.world, &draw.world, sizeof(instance.world));
+            instance.batchIndex = batch.countOffset;
+            instance.indirectOffset = batch.indirectOffset;
+            instance.firstIndex = draw.firstIndex;
+            instance.indexCount = draw.indexCount;
+            instance.alphaCutoff = draw.constants.alphaCutoff;
+            ++batch.instanceCount;
+            _gpuShadowInstances.push_back(instance);
+        }
+        for (const vk::GpuShadowBatchVK& batch : _gpuShadowBatches)
+        {
+            const std::uint32_t end = batch.firstInstance + batch.instanceCount;
+            for (std::uint32_t i = batch.firstInstance; i < end; ++i)
+                _gpuShadowInstances[i].batchCapacity = batch.instanceCount;
+        }
+        if (!EnsureGpuShadowCapacity(_gpuShadowInstances.size(), _gpuShadowBatches.size()))
+        {
+            LOG_WARN(Graphics, "VK shadow: GPU buffer growth failed; retaining direct caster submission");
+            _gpuShadowEnabled = false;
+            _gpuShadowInstances.clear();
+            _gpuShadowBatches.clear();
+        }
+        else
+            vk::UploadMappedBuffer(_gpuShadowInstancesBuffer, _gpuShadowInstances.data(),
+                                   _gpuShadowInstances.size() * sizeof(vk::GpuShadowInstanceVK));
+    }
+
+    const bool recordGpuShadow = gpuShadow && _gpuShadowEnabled && !_gpuShadowInstances.empty() &&
+                                 !_gpuShadowBatches.empty();
 
     const int res = _shadowTuning.resolution;
     const auto recordCascades = [&](std::uint32_t begin, std::uint32_t end)
@@ -970,6 +1456,80 @@ void EngineVK::RenderShadowDepthFramePlan(const render::frame::Frame& frame)
             VkRect2D scissor{};
             scissor.extent = {static_cast<std::uint32_t>(res), static_cast<std::uint32_t>(res)};
             vkCmdSetScissor(context.commandBuffer, 0, 1, &scissor);
+
+            if (recordGpuShadow)
+            {
+                float lightVP[16] = {};
+                std::memcpy(lightVP, cascades.camRelVP[cascadeIndex].m.data(), sizeof(lightVP));
+                VkPipeline lastPipeline = VK_NULL_HANDLE;
+                VkBuffer lastVertexBuffer = VK_NULL_HANDLE;
+                VkBuffer lastIndexBuffer = VK_NULL_HANDLE;
+                VkDescriptorSet lastAlphaDescriptor = VK_NULL_HANDLE;
+                for (const vk::GpuShadowBatchVK& batch : _gpuShadowBatches)
+                {
+                    if (batch.instanceCount == 0)
+                        continue;
+                    const bool alpha = batch.alphaTested != 0;
+                    const VkPipeline pipeline = alpha ? _gpuShadowAlphaPipeline : _gpuShadowDepthPipeline;
+                    const VkPipelineLayout layout = alpha ? _gpuShadowAlphaPipelineLayout : _gpuShadowDepthPipelineLayout;
+                    if (pipeline != lastPipeline)
+                    {
+                        vkCmdBindPipeline(context.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                        vkCmdBindDescriptorSets(context.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1,
+                                                &_gpuShadowDescriptorSet, 0, nullptr);
+                        vkCmdPushConstants(context.commandBuffer, layout, VK_SHADER_STAGE_VERTEX_BIT, 0,
+                                           sizeof(lightVP), lightVP);
+                        lastPipeline = pipeline;
+                        lastAlphaDescriptor = VK_NULL_HANDLE;
+                    }
+                    if (alpha)
+                    {
+                        TextureVK* texture = ResolveTexture(batch.alphaTextureId);
+                        VkDescriptorSet alphaDescriptor = texture ? texture->GetDescriptorSet() : VK_NULL_HANDLE;
+                        if (!alphaDescriptor && _fallbackWhiteTexture)
+                            alphaDescriptor = _fallbackWhiteTexture->GetDescriptorSet();
+                        if (alphaDescriptor && alphaDescriptor != lastAlphaDescriptor)
+                        {
+                            vkCmdBindDescriptorSets(context.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 1, 1,
+                                                    &alphaDescriptor, 0, nullptr);
+                            lastAlphaDescriptor = alphaDescriptor;
+                        }
+                    }
+                    const vk::MeshResourcesVK* mesh = _meshRegistry.Resolve(batch.meshId);
+                    if (!mesh || !mesh->IsValid())
+                        continue;
+                    const VkDeviceSize vertexOffset = 0;
+                    if (mesh->vertexBuffer != lastVertexBuffer)
+                    {
+                        vkCmdBindVertexBuffers(context.commandBuffer, 0, 1, &mesh->vertexBuffer, &vertexOffset);
+                        lastVertexBuffer = mesh->vertexBuffer;
+                    }
+                    if (mesh->indexBuffer != lastIndexBuffer)
+                    {
+                        vkCmdBindIndexBuffer(context.commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+                        lastIndexBuffer = mesh->indexBuffer;
+                    }
+                    const VkDeviceSize indirectOffset =
+                        (static_cast<VkDeviceSize>(cascadeIndex) * _gpuShadowInstanceCapacity + batch.indirectOffset) *
+                        sizeof(VkDrawIndexedIndirectCommand);
+                    const VkDeviceSize countOffset =
+                        (static_cast<VkDeviceSize>(cascadeIndex) * _gpuShadowBatchCapacity + batch.countOffset) *
+                        sizeof(std::uint32_t);
+                    if (_gpuSceneCapabilities.drawIndirectCount)
+                    {
+                        vkCmdDrawIndexedIndirectCount(context.commandBuffer, _gpuShadowIndirectBuffer.buffer, indirectOffset,
+                                                      _gpuShadowCountBuffer.buffer, countOffset, batch.instanceCount,
+                                                      sizeof(VkDrawIndexedIndirectCommand));
+                    }
+                    else
+                    {
+                        vkCmdDrawIndexedIndirect(context.commandBuffer, _gpuShadowIndirectBuffer.buffer, indirectOffset,
+                                                 batch.instanceCount, sizeof(VkDrawIndexedIndirectCommand));
+                    }
+                }
+                context.recorded = vkEndCommandBuffer(context.commandBuffer) == VK_SUCCESS;
+                continue;
+            }
 
             VkPipeline lastPipeline = VK_NULL_HANDLE;
             VkDescriptorSet lastAlphaDescriptor = VK_NULL_HANDLE;
@@ -1062,6 +1622,9 @@ void EngineVK::RenderShadowDepthFramePlan(const render::frame::Frame& frame)
         vkCmdResetQueryPool(cb, _shadowTimingQueryPool, 0, 2);
         vkCmdWriteTimestamp(cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, _shadowTimingQueryPool, 0);
     }
+
+    if (recordGpuShadow)
+        RecordGpuShadowCull(cb, cascades.camRelVP[0].m.data(), static_cast<std::uint32_t>(cascades.count));
 
     // --- One render pass per cascade, with worker-recorded secondary commands ---
     for (int c = 0; c < cascades.count; ++c)

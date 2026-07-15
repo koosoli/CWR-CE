@@ -46,6 +46,44 @@ struct GpuSceneBatchVK
 static_assert(sizeof(GpuSceneBatchVK) == 24);
 static_assert(sizeof(VkDrawIndexedIndirectCommand) == 20);
 
+// Shadow submission deliberately has a separate ABI from receiver rendering.
+// The culler writes one command per visible caster and the vertex shaders use
+// firstInstance/gl_BaseInstanceARB to select this record without a CPU draw.
+struct alignas(16) GpuShadowInstanceVK
+{
+    float localBoundsCenter[4] = {}; // xyz, local-space sphere radius
+    float world[16] = {};            // camera-relative affine world matrix
+    std::uint32_t batchIndex = 0;
+    std::uint32_t indirectOffset = 0;
+    std::uint32_t batchCapacity = 0;
+    std::uint32_t firstIndex = 0;
+    std::uint32_t indexCount = 0;
+    float alphaCutoff = 0.5f;
+    std::uint32_t padding[3] = {};
+};
+
+static_assert(offsetof(GpuShadowInstanceVK, localBoundsCenter) == 0);
+static_assert(offsetof(GpuShadowInstanceVK, world) == 16);
+static_assert(offsetof(GpuShadowInstanceVK, batchIndex) == 80);
+static_assert(offsetof(GpuShadowInstanceVK, alphaCutoff) == 100);
+static_assert(sizeof(GpuShadowInstanceVK) == 128);
+
+// A shadow batch can bind exactly one mesh/index buffer and, for cutouts, one
+// alpha texture. Each cascade owns an independent count/indirect segment.
+struct GpuShadowBatchVK
+{
+    std::uint32_t firstInstance = 0;
+    std::uint32_t instanceCount = 0;
+    std::uint32_t indirectOffset = 0;
+    std::uint32_t countOffset = 0;
+    std::uint32_t meshId = 0;
+    std::uint32_t alphaTextureId = 0;
+    std::uint32_t alphaTested = 0;
+    std::uint32_t padding = 0;
+};
+
+static_assert(sizeof(GpuShadowBatchVK) == 32);
+
 struct GpuSceneCapabilitiesVK
 {
     bool compute = false;

@@ -33,3 +33,17 @@ TEST_CASE("Vulkan GPU scene ABI matches Vulkan indirect commands", "[vulkan][gpu
     CHECK(batch.firstInstance == batch.indirectOffset);
     CHECK(batch.countOffset == 2);
 }
+
+TEST_CASE("Vulkan GPU shadow ABI carries indirect base-instance data", "[vulkan][gpu-shadow]")
+{
+    STATIC_REQUIRE(sizeof(Poseidon::vk::GpuShadowInstanceVK) == 112);
+    STATIC_REQUIRE(offsetof(Poseidon::vk::GpuShadowInstanceVK, world) == 16);
+    STATIC_REQUIRE(offsetof(Poseidon::vk::GpuShadowInstanceVK, alphaCutoff) == 100);
+    STATIC_REQUIRE(sizeof(Poseidon::vk::GpuShadowBatchVK) == 32);
+    STATIC_REQUIRE(sizeof(VkDrawIndexedIndirectCommand) == 20);
+
+    const Poseidon::vk::GpuShadowBatchVK batch{3, 7, 3, 2, 9, 11, 1, 0};
+    CHECK(batch.firstInstance == batch.indirectOffset);
+    CHECK(batch.alphaTested == 1);
+    CHECK(batch.alphaTextureId == 11);
+}

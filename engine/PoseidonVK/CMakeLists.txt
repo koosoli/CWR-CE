@@ -48,6 +48,10 @@ set(POSEIDON_VK_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepth.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthAlpha.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthAlpha.frag.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadow_cull.comp.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthGpu.vert.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthGpuAlpha.vert.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthGpuAlpha.frag.glsl
 )
 
 set(POSEIDON_VK_GENERATED_SHADER_HEADERS)

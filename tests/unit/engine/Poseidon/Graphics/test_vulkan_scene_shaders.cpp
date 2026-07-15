@@ -8,10 +8,12 @@
 #include <glslang/SPIRV/GlslangToSpv.h>
 
 #include <cstddef>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
@@ -204,6 +206,41 @@ TEST_CASE("Vulkan scene fragment shader drives sun lighting from frame constants
     CHECK(fragmentSource.find("frame.lightingParams.x") != std::string::npos);
     CHECK(fragmentSource.find("-sunDir") != std::string::npos);
     CHECK(fragmentSource.find("* sunOn") != std::string::npos);
+}
+
+TEST_CASE("Vulkan GPU shadow shaders preserve the indirect caster ABI", "[vulkan][scene-shaders][gpu-shadow]")
+{
+    GlslangInit init;
+    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
+    const std::string culler = ReadTextFile(shaderDir / "shadow_cull.comp.glsl");
+    const std::string opaqueVertex = ReadTextFile(shaderDir / "shadowDepthGpu.vert.glsl");
+    const std::string alphaVertex = ReadTextFile(shaderDir / "shadowDepthGpuAlpha.vert.glsl");
+    const std::string alphaFragment = ReadTextFile(shaderDir / "shadowDepthGpuAlpha.frag.glsl");
+
+    CHECK(culler.find("layout(set = 0, binding = 0, std430) readonly buffer ShadowInstances") != std::string::npos);
+    CHECK(culler.find("layout(set = 0, binding = 1, std430) buffer ShadowCounts") != std::string::npos);
+    CHECK(culler.find("layout(set = 0, binding = 2, std430) buffer ShadowIndirect") != std::string::npos);
+    CHECK(culler.find("visibleLightSphere") != std::string::npos);
+    CHECK(culler.find("firstInstance = instanceIndex") != std::string::npos);
+    CHECK(opaqueVertex.find("gl_BaseInstanceARB") != std::string::npos);
+    CHECK(alphaVertex.find("gl_BaseInstanceARB") != std::string::npos);
+    CHECK(alphaVertex.find("vAlphaCutoff = instance.alphaCutoff") != std::string::npos);
+    CHECK(alphaFragment.find("layout(set = 1, binding = 0) uniform sampler2D uTex") != std::string::npos);
+    CHECK(alphaFragment.find("vAlphaCutoff") != std::string::npos);
+
+    const std::array<std::pair<const std::string*, EShLanguage>, 4> shaders = {{
+        {&culler, EShLangCompute},
+        {&opaqueVertex, EShLangVertex},
+        {&alphaVertex, EShLangVertex},
+        {&alphaFragment, EShLangFragment},
+    }};
+    for (const auto& [source, stage] : shaders)
+    {
+        const CompileOutcome outcome = CompileVulkanGLSL(*source, stage);
+        CAPTURE(outcome.info);
+        REQUIRE(outcome.success);
+        REQUIRE(outcome.spirvWordCount > 0);
+    }
 }
 
 TEST_CASE("Vulkan scene fragment shader uses hardware PCF comparison sampling", "[vulkan][scene-shaders]")

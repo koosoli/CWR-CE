@@ -507,6 +507,23 @@ class EngineVK : public EngineDummy
     VkPipelineLayout _shadowAlphaPipelineLayout = VK_NULL_HANDLE;
     VkShaderModule _shadowAlphaVertexModule = VK_NULL_HANDLE;
     VkShaderModule _shadowAlphaFragmentModule = VK_NULL_HANDLE;
+    vk::BufferVK _gpuShadowInstancesBuffer;
+    vk::BufferVK _gpuShadowIndirectBuffer;
+    vk::BufferVK _gpuShadowCountBuffer;
+    VkDescriptorSetLayout _gpuShadowDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool _gpuShadowDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet _gpuShadowDescriptorSet = VK_NULL_HANDLE;
+    VkPipelineLayout _gpuShadowCullPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline _gpuShadowCullPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout _gpuShadowDepthPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline _gpuShadowDepthPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout _gpuShadowAlphaPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline _gpuShadowAlphaPipeline = VK_NULL_HANDLE;
+    std::vector<vk::GpuShadowInstanceVK> _gpuShadowInstances;
+    std::vector<vk::GpuShadowBatchVK> _gpuShadowBatches;
+    std::size_t _gpuShadowInstanceCapacity = 0;
+    std::size_t _gpuShadowBatchCapacity = 0;
+    bool _gpuShadowEnabled = false;
     VkCommandBuffer _shadowCommandBuffer = VK_NULL_HANDLE;
     struct ShadowRecordingContextVK
     {
@@ -535,6 +552,10 @@ class EngineVK : public EngineDummy
     std::uint32_t AllocateMeshResourceId() noexcept { return _nextMeshResourceId++; }
     void UpdateShadowFrameConstants();
     bool CreateShadowDepthPipeline();
+    bool CreateGpuShadowResources();
+    bool EnsureGpuShadowCapacity(std::size_t instanceCount, std::size_t batchCount);
+    void DestroyGpuShadowResources();
+    void RecordGpuShadowCull(VkCommandBuffer commandBuffer, const float* lightVPs, std::uint32_t cascadeCount);
     void RenderShadowDepthFramePlan(const render::frame::Frame& frame);
     bool CompileShader(const char* source, int stage, std::vector<uint32_t>& spirv, std::string& error);
 
