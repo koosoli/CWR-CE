@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
@@ -42,6 +43,7 @@
 #include <limits>
 #include <set>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -663,6 +665,7 @@ void EngineVK::NextFrame()
 
 void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
 {
+    const auto submitStarted = std::chrono::steady_clock::now();
     _lastFrameConstants = vk::BuildFrameConstants(frame);
     _lastFrameConstants.grassParams[0] = _grassParam[0];
     _lastFrameConstants.grassParams[1] = _grassParam[1];
@@ -682,7 +685,11 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
     // Submit CSM depth before the receiver command buffer is recorded.  The
     // same-queue submission in EngineVK_Shadow establishes depth-write to
     // fragment-sample visibility without a CPU queue drain.
+    const auto shadowRecordStarted = std::chrono::steady_clock::now();
     RenderShadowDepthFramePlan(frame);
+    _cpuShadowRecordMs = std::chrono::duration<float, std::milli>(
+                             std::chrono::steady_clock::now() - shadowRecordStarted)
+                             .count();
     for (auto& group : _sceneCommandGroups)
     {
         group.clear();
@@ -729,7 +736,11 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
         }
         _sceneCommandGroups[static_cast<std::uint32_t>(group)].push_back(commandIndex);
     }
+    const auto gpuSceneInputStarted = std::chrono::steady_clock::now();
     BuildGpuSceneInputs();
+    _cpuGpuSceneInputMs = std::chrono::duration<float, std::milli>(
+                               std::chrono::steady_clock::now() - gpuSceneInputStarted)
+                               .count();
     _hasFrameConstants = true;
 
     // Log summary once per second (every 60 frames) to avoid console spam
@@ -746,10 +757,16 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
                 passSummary += "=" + std::to_string(p.draws.size());
             }
             LOG_INFO(Graphics,
-                     "FramePlan: {} | {} draws, {} cmds, {} meshes, {} texs, gpu-scene={} instances={} batches={} count={}",
-                     passSummary, _lastDrawConstants.size(), _lastSceneDrawCommands.size(), _meshRegistry.Size(),
-                     _textureRegistry.size(), _gpuSceneEnabled, _gpuSceneInstances.size(), _gpuSceneBatches.size(),
-                     _gpuSceneCapabilities.drawIndirectCount ? "indirect-count" : "fixed-indirect");
+                      "FramePlan: {} | {} draws, {} cmds, {} meshes, {} texs, gpu-scene={} instances={} batches={} count={} shadow-draws={}/{}/{}/{} of {}",
+                       passSummary, _lastDrawConstants.size(), _lastSceneDrawCommands.size(), _meshRegistry.Size(),
+                       _textureRegistry.size(), _gpuSceneEnabled, _gpuSceneInstances.size(), _gpuSceneBatches.size(),
+                       _gpuSceneCapabilities.drawIndirectCount ? "indirect-count" : "fixed-indirect",
+                       _shadowCascadeDrawCounts[0], _shadowCascadeDrawCounts[1], _shadowCascadeDrawCounts[2],
+                       _shadowCascadeDrawCounts[3], _shadowResolvedDrawCount);
+            LOG_INFO(Graphics,
+                     "Vulkan CPU ms: submit={:.2f} gpu-scene-input={:.2f} shadow-record={:.2f} shadow-prepare={:.2f} shadow-secondary={:.2f} command-record={:.2f} fence-wait={:.2f}",
+                     _cpuSubmitFramePlanMs, _cpuGpuSceneInputMs, _cpuShadowRecordMs, _cpuShadowPrepareMs,
+                     _cpuShadowSecondaryRecordMs, _cpuCommandRecordMs, _cpuFrameFenceWaitMs);
         }
     }
 
@@ -757,6 +774,9 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
     if (_volumetricCloudsEnabled)
         vk::UploadMappedBuffer(_cloudConstantsBuffer, &_cloudConstants, sizeof(_cloudConstants));
     UploadDrawConstants();
+    _cpuSubmitFramePlanMs = std::chrono::duration<float, std::milli>(
+                                std::chrono::steady_clock::now() - submitStarted)
+                                .count();
 }
 
 void EngineVK::EnableNightEye(float night)
@@ -1361,12 +1381,36 @@ void EngineVK::BuildGpuSceneInputs()
 
     auto sameBatchState = [&](const vk::DrawConstantsVK& a, const vk::DrawConstantsVK& b)
     {
-        return a.meshId == b.meshId && a.textureIds[0] == b.textureIds[0] && a.textureIds[1] == b.textureIds[1] &&
-               a.depth == b.depth && a.blend == b.blend && a.fog == b.fog && a.cull == b.cull &&
-               a.frontFace == b.frontFace && a.alpha == b.alpha && a.lighting == b.lighting &&
-               a.texGen == b.texGen && a.surface == b.surface && a.samplerFilter == b.samplerFilter &&
-               a.samplerClamp == b.samplerClamp && a.shader == b.shader && a.alphaRef == b.alphaRef &&
-               a.stencilExclusion == b.stencilExclusion;
+        return std::tie(a.pass, a.meshId, a.textureIds[0], a.textureIds[1], a.depth, a.blend, a.fog, a.cull,
+                        a.frontFace, a.alpha, a.lighting, a.texGen, a.surface, a.samplerFilter, a.samplerClamp,
+                        a.shader, a.alphaRef, a.stencilExclusion) ==
+               std::tie(b.pass, b.meshId, b.textureIds[0], b.textureIds[1], b.depth, b.blend, b.fog, b.cull,
+                        b.frontFace, b.alpha, b.lighting, b.texGen, b.surface, b.samplerFilter, b.samplerClamp,
+                        b.shader, b.alphaRef, b.stencilExclusion);
+    };
+    const auto batchStateHash = [](const vk::DrawConstantsVK& draw)
+    {
+        std::uint64_t hash = 1469598103934665603ull;
+        const auto mix = [&](std::uint32_t value) { hash = (hash ^ value) * 1099511628211ull; };
+        mix(draw.pass);
+        mix(draw.meshId);
+        mix(draw.textureIds[0]);
+        mix(draw.textureIds[1]);
+        mix(draw.depth);
+        mix(draw.blend);
+        mix(draw.fog);
+        mix(draw.cull);
+        mix(draw.frontFace);
+        mix(draw.alpha);
+        mix(draw.lighting);
+        mix(draw.texGen);
+        mix(draw.surface);
+        mix(draw.samplerFilter);
+        mix(draw.samplerClamp);
+        mix(draw.shader);
+        mix(draw.alphaRef);
+        mix(draw.stencilExclusion);
+        return hash;
     };
 
     for (std::uint32_t groupIndex = 0; groupIndex < _sceneCommandGroups.size(); ++groupIndex)
@@ -1374,7 +1418,71 @@ void EngineVK::BuildGpuSceneInputs()
         const bool orderSensitive = groupIndex == static_cast<std::uint32_t>(SceneGroup::WorldLate) ||
                                     groupIndex == static_cast<std::uint32_t>(SceneGroup::Present);
         const auto& commands = _sceneCommandGroups[groupIndex];
-        for (std::uint32_t commandIndex : commands)
+        std::vector<std::uint32_t> stateSortedCommands;
+        bool canReorder = groupIndex == static_cast<std::uint32_t>(SceneGroup::Opaque) ||
+                          groupIndex == static_cast<std::uint32_t>(SceneGroup::Cutout);
+        if (canReorder)
+        {
+            for (std::uint32_t commandIndex : commands)
+            {
+                const vk::DrawConstantsVK& draw = _lastDrawConstants[_lastSceneDrawCommands[commandIndex].drawIndex];
+                if (draw.blend != vk::EnumToUint(render::BlendMode::Opaque) ||
+                    draw.depth != vk::EnumToUint(render::DepthMode::Normal))
+                {
+                    canReorder = false;
+                    break;
+                }
+            }
+        }
+        if (canReorder)
+        {
+            // These groups contain only depth-writing, non-blended draws. Stable
+            // state bucketing reduces indirect calls without changing visibility.
+            struct StateBucket
+            {
+                std::uint32_t head = UINT32_MAX;
+                std::uint32_t tail = UINT32_MAX;
+            };
+            std::vector<std::uint32_t> next(commands.size(), UINT32_MAX);
+            std::vector<StateBucket> buckets;
+            buckets.reserve(commands.size());
+            std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> bucketIndices;
+            bucketIndices.reserve(commands.size());
+            for (std::uint32_t position = 0; position < commands.size(); ++position)
+            {
+                const vk::DrawConstantsVK& draw = _lastDrawConstants[_lastSceneDrawCommands[commands[position]].drawIndex];
+                std::vector<std::uint32_t>& candidates = bucketIndices[batchStateHash(draw)];
+                std::uint32_t bucketIndex = UINT32_MAX;
+                for (std::uint32_t candidate : candidates)
+                {
+                    const std::uint32_t representative = commands[buckets[candidate].head];
+                    if (sameBatchState(_lastDrawConstants[_lastSceneDrawCommands[representative].drawIndex], draw))
+                    {
+                        bucketIndex = candidate;
+                        break;
+                    }
+                }
+                if (bucketIndex == UINT32_MAX)
+                {
+                    bucketIndex = static_cast<std::uint32_t>(buckets.size());
+                    buckets.push_back({position, position});
+                    candidates.push_back(bucketIndex);
+                }
+                else
+                {
+                    next[buckets[bucketIndex].tail] = position;
+                    buckets[bucketIndex].tail = position;
+                }
+            }
+            stateSortedCommands.reserve(commands.size());
+            for (const StateBucket& bucket : buckets)
+            {
+                for (std::uint32_t position = bucket.head; position != UINT32_MAX; position = next[position])
+                    stateSortedCommands.push_back(commands[position]);
+            }
+        }
+        const auto& orderedCommands = canReorder ? stateSortedCommands : commands;
+        for (std::uint32_t commandIndex : orderedCommands)
         {
             const vk::SceneDrawCommandVK& command = _lastSceneDrawCommands[commandIndex];
             const vk::DrawConstantsVK& draw = _lastDrawConstants[command.drawIndex];
@@ -1434,13 +1542,16 @@ void EngineVK::BuildGpuSceneInputs()
                 instance.lodDistance[lod] = mesh->lodDistance[lod];
             }
             ++batch.instanceCount;
-            instance.batchCapacity = batch.instanceCount;
-            // Every existing member of a batch must carry its final capacity;
-            // this avoids a metadata indirection in the hot compute shader.
-            for (std::uint32_t i = batch.firstInstance; i < _gpuSceneInstances.size(); ++i)
-                _gpuSceneInstances[i].batchCapacity = batch.instanceCount;
             _gpuSceneInstances.push_back(instance);
         }
+    }
+    // The compute shader reads the final capacity from every instance. Populate
+    // it after all batches close so input construction remains linear.
+    for (const vk::GpuSceneBatchVK& batch : _gpuSceneBatches)
+    {
+        const std::uint32_t end = batch.firstInstance + batch.instanceCount;
+        for (std::uint32_t instanceIndex = batch.firstInstance; instanceIndex < end; ++instanceIndex)
+            _gpuSceneInstances[instanceIndex].batchCapacity = batch.instanceCount;
     }
     if (!EnsureGpuSceneCapacity(_gpuSceneInstances.size(), _gpuSceneBatches.size()))
     {
@@ -1855,8 +1966,6 @@ bool EngineVK::CreateSwapchain()
     };
     VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference depthWriteRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
-    VkAttachmentReference depthReadRef{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-
     if (WorldCompositionActive())
     {
         const VkFormat worldColorFormat =
@@ -1865,22 +1974,13 @@ bool EngineVK::CreateSwapchain()
         VkAttachmentDescription worldAttachments[] = {
             makeAttachment(worldColorFormat, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
             makeAttachment(depthFormat, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL)};
-        VkSubpassDescription worldSubpasses[3]{};
-        worldSubpasses[0].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        worldSubpasses[0].colorAttachmentCount = 1;
-        worldSubpasses[0].pColorAttachments = &colorRef;
-        worldSubpasses[0].pDepthStencilAttachment = &depthWriteRef;
-        worldSubpasses[1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        worldSubpasses[1].inputAttachmentCount = 1;
-        worldSubpasses[1].pInputAttachments = &depthReadRef;
-        worldSubpasses[1].colorAttachmentCount = 1;
-        worldSubpasses[1].pColorAttachments = &colorRef;
-        worldSubpasses[2].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        worldSubpasses[2].colorAttachmentCount = 1;
-        worldSubpasses[2].pColorAttachments = &colorRef;
-        worldSubpasses[2].pDepthStencilAttachment = &depthReadRef;
+        VkSubpassDescription worldSubpass{};
+        worldSubpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        worldSubpass.colorAttachmentCount = 1;
+        worldSubpass.pColorAttachments = &colorRef;
+        worldSubpass.pDepthStencilAttachment = &depthWriteRef;
 
-        VkSubpassDependency worldDependencies[4]{};
+        VkSubpassDependency worldDependencies[2]{};
         worldDependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
         worldDependencies[0].dstSubpass = 0;
         worldDependencies[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
@@ -1890,36 +1990,20 @@ bool EngineVK::CreateSwapchain()
         worldDependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         worldDependencies[1].srcSubpass = 0;
-        worldDependencies[1].dstSubpass = 1;
+        worldDependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
         worldDependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
                                             VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
         worldDependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-        worldDependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
-                                            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        worldDependencies[1].dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT |
-                                              VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        worldDependencies[2].srcSubpass = 1;
-        worldDependencies[2].dstSubpass = 2;
-        worldDependencies[2].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        worldDependencies[2].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        worldDependencies[2].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-                                            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
-        worldDependencies[2].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                                              VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-        worldDependencies[3].srcSubpass = 2;
-        worldDependencies[3].dstSubpass = VK_SUBPASS_EXTERNAL;
-        worldDependencies[3].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        worldDependencies[3].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-        worldDependencies[3].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-        worldDependencies[3].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        worldDependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        worldDependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         VkRenderPassCreateInfo info{};
         info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
         info.attachmentCount = 2;
         info.pAttachments = worldAttachments;
-        info.subpassCount = 3;
-        info.pSubpasses = worldSubpasses;
-        info.dependencyCount = 4;
+        info.subpassCount = 1;
+        info.pSubpasses = &worldSubpass;
+        info.dependencyCount = 2;
         info.pDependencies = worldDependencies;
         result = vkCreateRenderPass(_device, &info, nullptr, &_renderPass);
         if (result != VK_SUCCESS)
@@ -3446,7 +3530,7 @@ bool EngineVK::CreateScenePipeline()
     VkResult result =
         vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_scenePipeline);
 
-    if (result == VK_SUCCESS && WorldCompositionActive())
+    if (result == VK_SUCCESS && _volumetricCloudsEnabled)
     {
         VkPipelineDepthStencilStateCreateInfo worldLateDepthStencil =
             vk::BuildDepthStencilState(render::DepthMode::ReadOnly);
@@ -3454,14 +3538,14 @@ bool EngineVK::CreateScenePipeline()
         pipelineInfo.renderPass = _worldLateRenderPass;
         pipelineInfo.subpass = 0;
         result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_worldLateScenePipeline);
-        if (result == VK_SUCCESS)
-        {
-            pipelineInfo.pDepthStencilState = &depthStencil;
-            pipelineInfo.renderPass = _presentRenderPass;
-            pipelineInfo.subpass = 0;
-            result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
-                                               &_cockpitScenePipeline);
-        }
+    }
+    if (result == VK_SUCCESS && WorldCompositionActive())
+    {
+        pipelineInfo.pDepthStencilState = &depthStencil;
+        pipelineInfo.renderPass = _presentRenderPass;
+        pipelineInfo.subpass = 0;
+        result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                           &_cockpitScenePipeline);
     }
 
     // Keep the shader modules alive so the pipeline cache can create variants.
@@ -3486,14 +3570,17 @@ bool EngineVK::CreateScenePipeline()
     // Initialise the pipeline cache with the fixed state shared across all variants.
     _scenePipelineCache.Init(_device, _renderPass, _scenePipelineLayout, _sceneVertexModule, _sceneFragmentModule,
                               vertexInput, inputAssembly, viewportState, multisampling);
-    if (WorldCompositionActive())
+    if (_volumetricCloudsEnabled)
     {
         _worldLateScenePipelineCache.Init(_device, _worldLateRenderPass, _scenePipelineLayout, _sceneVertexModule,
                                            _sceneFragmentModule, vertexInput, inputAssembly, viewportState,
-                                          multisampling);
+                                           multisampling);
+    }
+    if (WorldCompositionActive())
+    {
         _cockpitScenePipelineCache.Init(_device, _presentRenderPass, _scenePipelineLayout, _sceneVertexModule,
-                                         _sceneFragmentModule, vertexInput, inputAssembly, viewportState,
-                                         multisampling);
+                                        _sceneFragmentModule, vertexInput, inputAssembly, viewportState,
+                                       multisampling);
     }
 
     LOG_INFO(Graphics, "Vulkan: scene pipeline created");
@@ -4894,20 +4981,51 @@ bool EngineVK::CreateGpuTimingResources()
     info.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
     info.queryType = VK_QUERY_TYPE_TIMESTAMP;
     info.queryCount = 11;
-    return vkCreateQueryPool(_device, &info, nullptr, &_gpuTimingQueryPool) == VK_SUCCESS;
+    if (vkCreateQueryPool(_device, &info, nullptr, &_gpuTimingQueryPool) != VK_SUCCESS)
+        return false;
+
+    info.queryCount = 2;
+    if (vkCreateQueryPool(_device, &info, nullptr, &_shadowTimingQueryPool) != VK_SUCCESS)
+    {
+        vkDestroyQueryPool(_device, _gpuTimingQueryPool, nullptr);
+        _gpuTimingQueryPool = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
 }
 
 void EngineVK::DestroyGpuTimingResources()
 {
     if (_gpuTimingQueryPool)
         vkDestroyQueryPool(_device, _gpuTimingQueryPool, nullptr);
+    if (_shadowTimingQueryPool)
+        vkDestroyQueryPool(_device, _shadowTimingQueryPool, nullptr);
     _gpuTimingQueryPool = VK_NULL_HANDLE;
+    _shadowTimingQueryPool = VK_NULL_HANDLE;
     _gpuTimingPending = false;
+    _shadowTimingPending = false;
 }
 
 void EngineVK::LogGpuTimings()
 {
-    if (!_gpuTimingPending || !_gpuTimingQueryPool || _timestampPeriodNs <= 0.0f)
+    if ((!_gpuTimingPending && !_shadowTimingPending) || _timestampPeriodNs <= 0.0f)
+        return;
+
+    double shadowMs = 0.0;
+    if (_shadowTimingPending && _shadowTimingQueryPool)
+    {
+        std::array<std::uint64_t, 2> shadowTimestamps{};
+        const VkResult shadowResult = vkGetQueryPoolResults(
+            _device, _shadowTimingQueryPool, 0, static_cast<uint32_t>(shadowTimestamps.size()),
+            sizeof(shadowTimestamps), shadowTimestamps.data(), sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT);
+        if (shadowResult == VK_SUCCESS)
+        {
+            _shadowTimingPending = false;
+            shadowMs = static_cast<double>(shadowTimestamps[1] - shadowTimestamps[0]) * _timestampPeriodNs * 1e-6;
+        }
+    }
+
+    if (!_gpuTimingPending || !_gpuTimingQueryPool)
         return;
 
     std::array<std::uint64_t, 11> timestamps{};
@@ -4926,9 +5044,9 @@ void EngineVK::LogGpuTimings()
         return static_cast<double>(timestamps[end] - timestamps[begin]) * _timestampPeriodNs * 1e-6;
     };
     LOG_INFO(Graphics,
-             "Vulkan GPU ms: world={:.2f} terrain={:.2f} opaque={:.2f} cutout={:.2f} other={:.2f} clouds={:.2f} late={:.2f} compositor={:.2f} present={:.2f}",
-             elapsedMs(0, 7), elapsedMs(0, 1), elapsedMs(1, 2), elapsedMs(2, 3), elapsedMs(3, 4), elapsedMs(5, 6),
-             elapsedMs(6, 7), elapsedMs(8, 9), elapsedMs(8, 10));
+              "Vulkan GPU ms: shadow={:.2f} world={:.2f} terrain={:.2f} opaque={:.2f} cutout={:.2f} other={:.2f} clouds={:.2f} late={:.2f} compositor={:.2f} present={:.2f}",
+              shadowMs, elapsedMs(0, 7), elapsedMs(0, 1), elapsedMs(1, 2), elapsedMs(2, 3), elapsedMs(3, 4),
+              elapsedMs(5, 6), elapsedMs(6, 7), elapsedMs(8, 9), elapsedMs(8, 10));
 }
 
 bool EngineVK::UploadDrawConstants()
@@ -5195,6 +5313,18 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         }
         if (hasGpuBatches)
         {
+            // All GPU-scene draws select their DrawConstants entry through
+            // gl_BaseInstanceARB, so this fallback push is invariant per group.
+            const vk::ScenePushConstantsVK constants =
+                vk::BuildScenePushConstants(vk::BuildIdentityScenePushConstants().world, true, 0);
+            vkCmdPushConstants(commandBuffer, _scenePipelineLayout,
+                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                               vk::kScenePushConstantsSize, &constants);
+
+            VkDescriptorSet lastBoundTexDescriptorSet = VK_NULL_HANDLE;
+            VkDescriptorSet lastBoundTex1DescriptorSet = VK_NULL_HANDLE;
+            VkBuffer lastBoundVertexBuffer = VK_NULL_HANDLE;
+            VkBuffer lastBoundIndexBuffer = VK_NULL_HANDLE;
             for (const vk::GpuSceneBatchVK& batch : _gpuSceneBatches)
             {
                 if (batch.sceneGroup != static_cast<std::uint32_t>(group) || batch.instanceCount == 0)
@@ -5209,17 +5339,25 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                 key.blend = static_cast<render::BlendMode>(draw.blend);
                 key.surface = static_cast<render::SurfaceMode>(draw.surface);
                 VkPipeline pipeline = scenePipelineCache.Get(key);
-                vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                  pipeline ? pipeline : fallbackScenePipeline);
+                if (!pipeline)
+                    pipeline = fallbackScenePipeline;
+                if (pipeline != lastBoundPipeline)
+                {
+                    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+                    lastBoundPipeline = pipeline;
+                }
 
                 TextureVK* texture = draw.textureIds[0] ? ResolveTexture(draw.textureIds[0]) : nullptr;
                 VkDescriptorSet textureSet = texture ? texture->GetDescriptorSet(draw.samplerFilter, draw.samplerClamp)
                                                      : VK_NULL_HANDLE;
                 if (!textureSet && _fallbackWhiteTexture)
                     textureSet = _fallbackWhiteTexture->GetDescriptorSet(draw.samplerFilter, draw.samplerClamp);
-                if (textureSet)
+                if (textureSet && textureSet != lastBoundTexDescriptorSet)
+                {
                     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipelineLayout, 1, 1,
                                             &textureSet, 0, nullptr);
+                    lastBoundTexDescriptorSet = textureSet;
+                }
                 TextureVK* texture1 = draw.textureIds[1] ? ResolveTexture(draw.textureIds[1]) : nullptr;
                 const auto shaderFamily = static_cast<render::ShaderFamily>(draw.shader);
                 const std::uint32_t clamp1 = (shaderFamily == render::ShaderFamily::Detail ||
@@ -5230,23 +5368,28 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
                                                         : VK_NULL_HANDLE;
                 if (!textureSet1 && _fallbackWhiteTexture)
                     textureSet1 = _fallbackWhiteTexture->GetDescriptorSet(draw.samplerFilter, clamp1);
-                if (textureSet1)
+                if (textureSet1 && textureSet1 != lastBoundTex1DescriptorSet)
+                {
                     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _scenePipelineLayout, 2, 1,
                                             &textureSet1, 0, nullptr);
+                    lastBoundTex1DescriptorSet = textureSet1;
+                }
                 const vk::MeshResourcesVK* mesh = _meshRegistry.Resolve(command.meshId);
                 if (!mesh || !mesh->IsValid())
                     mesh = _meshRegistry.Resolve(_bootstrapMeshId);
                 if (!mesh || !mesh->IsValid())
                     continue;
-                VkBuffer vertexBuffer = mesh->vertexBuffer;
                 const VkDeviceSize vertexOffset = 0;
-                vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &vertexOffset);
-                vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT16);
-                const vk::ScenePushConstantsVK constants =
-                    vk::BuildScenePushConstants(vk::BuildIdentityScenePushConstants().world, true, 0);
-                vkCmdPushConstants(commandBuffer, _scenePipelineLayout,
-                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-                                   vk::kScenePushConstantsSize, &constants);
+                if (mesh->vertexBuffer != lastBoundVertexBuffer)
+                {
+                    vkCmdBindVertexBuffers(commandBuffer, 0, 1, &mesh->vertexBuffer, &vertexOffset);
+                    lastBoundVertexBuffer = mesh->vertexBuffer;
+                }
+                if (mesh->indexBuffer != lastBoundIndexBuffer)
+                {
+                    vkCmdBindIndexBuffer(commandBuffer, mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT16);
+                    lastBoundIndexBuffer = mesh->indexBuffer;
+                }
                 const VkDeviceSize indirectOffset =
                     static_cast<VkDeviceSize>(batch.indirectOffset) * sizeof(VkDrawIndexedIndirectCommand);
                 if (_gpuSceneCapabilities.drawIndirectCount)
@@ -5478,11 +5621,6 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         recordSceneDraws(SceneGroup::Other);
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 4);
-        // The world render pass retains two legacy attachment-transition
-        // subpasses. They no longer draw cloud work, but must still be entered
-        // before ending the pass so the declared final layouts are valid.
-        vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdNextSubpass(commandBuffer, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdEndRenderPass(commandBuffer);
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 5);
@@ -5535,13 +5673,16 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         }
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 6);
-        renderPassInfo.renderPass = _worldLateRenderPass;
-        renderPassInfo.framebuffer = _worldLateFramebuffer;
-        renderPassInfo.clearValueCount = 0;
-        renderPassInfo.pClearValues = nullptr;
-        vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
-        recordSceneDraws(SceneGroup::WorldLate);
-        vkCmdEndRenderPass(commandBuffer);
+        if (_worldLateRenderPass && _worldLateFramebuffer)
+        {
+            renderPassInfo.renderPass = _worldLateRenderPass;
+            renderPassInfo.framebuffer = _worldLateFramebuffer;
+            renderPassInfo.clearValueCount = 0;
+            renderPassInfo.pClearValues = nullptr;
+            vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+            recordSceneDraws(SceneGroup::WorldLate);
+            vkCmdEndRenderPass(commandBuffer);
+        }
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 7);
         EndDebugLabel(commandBuffer);
@@ -5929,7 +6070,11 @@ void EngineVK::PresentBootstrapFrame()
     if (_swapchainDirty && !RecreateSwapchain())
         return;
 
+    const auto fenceWaitStarted = std::chrono::steady_clock::now();
     vkWaitForFences(_device, 1, &_inFlight, VK_TRUE, UINT64_MAX);
+    _cpuFrameFenceWaitMs = std::chrono::duration<float, std::milli>(
+                               std::chrono::steady_clock::now() - fenceWaitStarted)
+                               .count();
     LogGpuTimings();
 
     uint32_t imageIndex = 0;
@@ -5946,7 +6091,12 @@ void EngineVK::PresentBootstrapFrame()
         return;
     }
 
-    if (!RecordBootstrapCommand(imageIndex))
+    const auto commandRecordStarted = std::chrono::steady_clock::now();
+    const bool recordedCommand = RecordBootstrapCommand(imageIndex);
+    _cpuCommandRecordMs = std::chrono::duration<float, std::milli>(
+                              std::chrono::steady_clock::now() - commandRecordStarted)
+                              .count();
+    if (!recordedCommand)
         return;
 
     vkResetFences(_device, 1, &_inFlight);
@@ -6259,6 +6409,27 @@ std::uint32_t EngineVK::RetainShadowCasterMesh(const Shape& shape, bool dynamic)
     resources.indexBuffer = mesh.indexBuffer.buffer;
     resources.vertexCount = mesh.vertexCount;
     resources.indexCount = mesh.indexCount;
+    float minimum[3] = {source.vertices[0].position[0], source.vertices[0].position[1], source.vertices[0].position[2]};
+    float maximum[3] = {minimum[0], minimum[1], minimum[2]};
+    for (const vk::MeshVertexVK& vertex : source.vertices)
+    {
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            minimum[axis] = std::min(minimum[axis], vertex.position[axis]);
+            maximum[axis] = std::max(maximum[axis], vertex.position[axis]);
+        }
+    }
+    for (int axis = 0; axis < 3; ++axis)
+        resources.localBoundsCenter[axis] = (minimum[axis] + maximum[axis]) * 0.5f;
+    float radiusSquared = 0.0f;
+    for (const vk::MeshVertexVK& vertex : source.vertices)
+    {
+        const float dx = vertex.position[0] - resources.localBoundsCenter[0];
+        const float dy = vertex.position[1] - resources.localBoundsCenter[1];
+        const float dz = vertex.position[2] - resources.localBoundsCenter[2];
+        radiusSquared = std::max(radiusSquared, dx * dx + dy * dy + dz * dz);
+    }
+    resources.localBoundsRadius = std::sqrt(radiusSquared);
     _meshRegistry.Register(mesh.resourceId, resources);
     return mesh.resourceId;
 }

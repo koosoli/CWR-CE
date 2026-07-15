@@ -206,6 +206,25 @@ TEST_CASE("Vulkan scene fragment shader drives sun lighting from frame constants
     CHECK(fragmentSource.find("* sunOn") != std::string::npos);
 }
 
+TEST_CASE("Vulkan scene fragment shader uses hardware PCF comparison sampling", "[vulkan][scene-shaders]")
+{
+    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
+    const std::string fragmentSource = ReadTextFile(shaderDir / "scene.frag.glsl");
+
+    CHECK(fragmentSource.find("uniform sampler2DArrayShadow shadowMap") != std::string::npos);
+    CHECK(fragmentSource.find("texture(shadowMap, vec4(suv, float(c), sc.z - bias))") != std::string::npos);
+}
+
+TEST_CASE("Vulkan surface overlays receive cascade shadows independently of fog", "[vulkan][scene-shaders]")
+{
+    const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";
+    const std::string fragmentSource = ReadTextFile(shaderDir / "scene.frag.glsl");
+
+    CHECK(fragmentSource.find("kPassSurfaceOverlay = 6u") != std::string::npos);
+    CHECK(fragmentSource.find("drawPass == kPassSurfaceOverlay") != std::string::npos);
+    CHECK(fragmentSource.find("Fog is an atmospheric effect") != std::string::npos);
+}
+
 TEST_CASE("Vulkan scene fragment shader applies per-draw tint", "[vulkan][scene-shaders]")
 {
     const std::filesystem::path shaderDir = RepoRoot() / "engine" / "PoseidonVK" / "Shaders";

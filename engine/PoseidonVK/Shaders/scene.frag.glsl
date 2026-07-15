@@ -71,7 +71,7 @@ layout(set = 0, binding = 1, std430) readonly buffer DrawConstantsBuffer
     DrawConstants draws[];
 } drawConstants;
 
-layout(set = 0, binding = 2) uniform sampler2DArray shadowMap;
+layout(set = 0, binding = 2) uniform sampler2DArrayShadow shadowMap;
 layout(set = 1, binding = 0) uniform sampler2D tex0;
 layout(set = 2, binding = 0) uniform sampler2D tex1;
 
@@ -83,10 +83,12 @@ const uint kFamilyWater   = 2u;
 const uint kFamilyDetail  = 3u;
 const uint kFamilyGrass   = 4u;
 const uint kFamilyFlat    = 5u;
+const uint kPassWorldOpaque = 0u;
+const uint kPassWorldCutout = 1u;
+const uint kPassSurfaceOverlay = 6u;
 const uint kPassTerrainOpaque = 12u;
 const uint kLightingLit         = 0u;
 const uint kLightingSunDisabled = 1u;
-const uint kFogEnabled          = 0u;
 
 float CloudHash(vec3 p)
 {
@@ -320,8 +322,14 @@ void main()
     // -----------------------------------------------------------------------
     // Cascade shadow map lookup
     // -----------------------------------------------------------------------
-    uint fogMode = hasDraw ? drawConstants.draws[drawIdx].fog : 0u;
-    if (family != kFamilyFlat && family != kFamilyWater && fogMode == kFogEnabled && frame.shadowCtl.x > 0.5)
+    uint drawPass = hasDraw ? drawConstants.draws[drawIdx].pass : kPassTerrainOpaque;
+    bool shadowReceiver = drawPass == kPassTerrainOpaque || drawPass == kPassWorldOpaque ||
+                          drawPass == kPassWorldCutout || drawPass == kPassSurfaceOverlay;
+    // Fog is an atmospheric effect, not a shadow-receiver classification. Roads
+    // intentionally disable fog yet still need the CSM darkening that terrain gets.
+    bool shadowFamily = family != kFamilyWater &&
+                        (family != kFamilyFlat || drawPass == kPassSurfaceOverlay);
+    if (shadowReceiver && shadowFamily && frame.shadowCtl.x > 0.5)
     {
         int nC = int(frame.cascadeCtl.x);
         int omniN = int(frame.cascadeCtl.w);
@@ -336,7 +344,6 @@ void main()
         }
         if (ci < nC)
         {
-            float ts = frame.shadowCtl.w;
             float prevEdge = (ci > 0) ? frame.cascadeSplits[ci - 1] : 0.0;
             float ciMetric = (ci < omniN) ? dist3D : eyeDepth;
             float band = (frame.cascadeSplits[ci] - prevEdge) * 0.15;
@@ -355,16 +362,10 @@ void main()
                 if (suv.x > 0.0 && suv.x < 1.0 && suv.y > 0.0 && suv.y < 1.0 && sc.z > 0.0 && sc.z < 1.0)
                 {
                     float bias = frame.cascadeCtl.z * float(c + 1) * float(c + 1);
-                    // Four taps retain a symmetric PCF footprint while halving
-                    // the shadow-map reads on terrain and opaque world pixels.
-                    float lit = 0.0;
-                    for (int dy = 0; dy < 2; ++dy)
-                        for (int dx = 0; dx < 2; ++dx)
-                        {
-                            vec2 offset = vec2(float(dx) - 0.5, float(dy) - 0.5) * ts;
-                            lit += (sc.z - bias > texture(shadowMap, vec3(suv + offset, float(c))).r) ? 0.0 : 1.0;
-                        }
-                    litSum += w * (lit * 0.25);
+                    // The comparison sampler's linear filter evaluates the
+                    // equivalent 2x2 PCF footprint in one texture operation.
+                    float lit = texture(shadowMap, vec4(suv, float(c), sc.z - bias));
+                    litSum += w * lit;
                     wSum += w;
                 }
             }

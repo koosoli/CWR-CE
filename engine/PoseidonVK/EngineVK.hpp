@@ -379,6 +379,7 @@ class EngineVK : public EngineDummy
     VkSemaphore _imageAvailable = VK_NULL_HANDLE;
     VkFence _inFlight = VK_NULL_HANDLE;
     VkQueryPool _gpuTimingQueryPool = VK_NULL_HANDLE;
+    VkQueryPool _shadowTimingQueryPool = VK_NULL_HANDLE;
     uint32_t _graphicsQueueFamily = UINT32_MAX;
     uint32_t _presentQueueFamily = UINT32_MAX;
 
@@ -415,7 +416,17 @@ class EngineVK : public EngineDummy
     std::uint32_t _eyeAdaptationPendingIndex = 0;
     float _timestampPeriodNs = 0.0f;
     bool _gpuTimingPending = false;
+    bool _shadowTimingPending = false;
     std::uint32_t _gpuTimingFrameCount = 0;
+    float _cpuSubmitFramePlanMs = 0.0f;
+    float _cpuGpuSceneInputMs = 0.0f;
+    float _cpuShadowRecordMs = 0.0f;
+    float _cpuShadowPrepareMs = 0.0f;
+    float _cpuShadowSecondaryRecordMs = 0.0f;
+    float _cpuCommandRecordMs = 0.0f;
+    float _cpuFrameFenceWaitMs = 0.0f;
+    std::uint32_t _shadowResolvedDrawCount = 0;
+    std::array<std::uint32_t, 4> _shadowCascadeDrawCounts = {};
     vk::FrameConstantsVK _lastFrameConstants = {};
     std::array<float, 40> _skyMapCachedInputs = {};
     std::array<float, 40> _skyMapRequestedInputs = {};
@@ -497,6 +508,13 @@ class EngineVK : public EngineDummy
     VkShaderModule _shadowAlphaVertexModule = VK_NULL_HANDLE;
     VkShaderModule _shadowAlphaFragmentModule = VK_NULL_HANDLE;
     VkCommandBuffer _shadowCommandBuffer = VK_NULL_HANDLE;
+    struct ShadowRecordingContextVK
+    {
+        VkCommandPool commandPool = VK_NULL_HANDLE;
+        VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+        bool recorded = false;
+    };
+    std::array<ShadowRecordingContextVK, kShadowCascades> _shadowRecordingContexts = {};
     VkFence _shadowInFlight = VK_NULL_HANDLE;
     int _shadowMapRes = 0;
     int _shadowCascades = 0;
@@ -511,6 +529,8 @@ class EngineVK : public EngineDummy
 
     bool EnsureShadowResources(int res, int layers);
     void DestroyShadowResources();
+    bool EnsureShadowRecordingContexts();
+    void DestroyShadowRecordingContexts();
     void DestroyShadowCasterMeshes();
     std::uint32_t AllocateMeshResourceId() noexcept { return _nextMeshResourceId++; }
     void UpdateShadowFrameConstants();
