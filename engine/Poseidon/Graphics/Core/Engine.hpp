@@ -543,6 +543,10 @@ class Engine : public IGraphicsEngine
     // a backend may only return true after it has retained every native layer
     // and immutable map field in the supplied value snapshot.
     virtual bool WantsDedicatedTerrainOpaque() const { return false; }
+    // Resource-only terrain capture is distinct from replacing the legacy
+    // receiver. Backends use it to populate derived terrain resources while
+    // the legacy draw remains authoritative during staged activation.
+    virtual bool WantsTerrainOpaqueCapture() const { return WantsDedicatedTerrainOpaque(); }
     virtual bool CaptureDedicatedTerrainOpaque(const render::frame::TerrainOpaque& /*terrain*/) { return false; }
     virtual bool GetDedicatedTerrainOpaque(render::frame::TerrainOpaque& /*terrain*/) const { return false; }
     virtual std::uint32_t TerrainTextureResourceId(Texture* /*texture*/) { return 0; }

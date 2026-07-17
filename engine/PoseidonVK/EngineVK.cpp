@@ -630,11 +630,15 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
              _height, static_cast<int>(_windowMode), _graphicsQueueFamily, _presentQueueFamily);
     LOG_WARN(Graphics, "Vulkan: scene raster parity is in progress; water and some legacy clipped geometry may differ "
                         "from the GL33 renderer.");
-    // This milestone captures and uploads the immutable map, but intentionally
-    // does not install a dedicated terrain raster pass yet.
+    // Resource-only capture keeps the immutable map and its derived masks warm
+    // under the legacy receiver. It intentionally does not install a dedicated
+    // terrain raster pass until real detail/blend inputs are also bound.
     if (WantsDedicatedTerrainOpaque())
-        LOG_INFO(Graphics, "Vulkan terrain telemetry: mode=dedicated-capture raster=disabled descriptor-indexing=true "
+        LOG_INFO(Graphics, "Vulkan terrain telemetry: mode=dedicated raster=enabled descriptor-indexing=true "
                            "params-buffer={}", _terrainVk.ParamsBuffer().buffer != VK_NULL_HANDLE);
+    else if (WantsTerrainOpaqueCapture())
+        LOG_INFO(Graphics, "Vulkan terrain telemetry: mode=legacy-segments terrain-resources=staged "
+                           "descriptor-indexing=true");
     else
         LOG_WARN(Graphics, "Vulkan terrain telemetry: mode=legacy-segments reason={}",
                  _terrainDescriptorIndexingSupported ? "TerrainVK-not-ready" : "descriptor-indexing-unsupported");
@@ -707,11 +711,14 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
     // from the immutable plan. Raster submission remains gated off until the
     // descriptor-array material set and terrain shadow/sky-visibility passes
     // are attached; this must not silently replace the legacy receiver early.
-    if (frame.terrainOpaque && _terrainVk.Ready())
+    const render::frame::TerrainOpaque* terrainInput = frame.terrainOpaque ? &*frame.terrainOpaque
+                                                                             : (_capturedTerrainOpaque ? &*_capturedTerrainOpaque
+                                                                                                       : nullptr);
+    if (terrainInput && _terrainVk.Ready())
     {
-        if (_terrainVk.Upload(*frame.terrainOpaque))
+        if (_terrainVk.Upload(*terrainInput))
         {
-            const auto& terrain = *frame.terrainOpaque;
+            const auto& terrain = *terrainInput;
             if (UpdateTerrainLayerDescriptors(terrain))
             {
                 _terrainVk.Select(frame.cameraPosition[0], frame.cameraPosition[1], frame.cameraPosition[2],
@@ -728,7 +735,7 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
         {
             LOG_WARN(Graphics,
                      "Vulkan terrain telemetry: resource upload failed revision={} invalid-indices={}; legacy renderer remains authoritative",
-                     frame.terrainOpaque->revision, _terrainVk.Telemetry().invalidLayerIndices);
+                      terrainInput->revision, _terrainVk.Telemetry().invalidLayerIndices);
         }
     }
 
@@ -772,11 +779,9 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
                 case render::PassKind::SurfaceOverlay:
                 case render::PassKind::WorldWater:
                 case render::PassKind::WorldShadow:
-                    group = SceneGroup::Other;
-                    break;
                 case render::PassKind::WorldTransparent:
                 case render::PassKind::WorldLight:
-                    group = SceneGroup::WorldLate;
+                    group = SceneGroup::Other;
                     break;
                 case render::PassKind::CockpitOpaque:
                 case render::PassKind::CockpitCutout:
@@ -817,10 +822,12 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
                         _shadowCascadeDrawCounts[3], _shadowResolvedDrawCount);
             const vk::TerrainVK::DescriptorTelemetry& terrainTelemetry = _terrainVk.Telemetry();
             LOG_INFO(Graphics,
-                      "Vulkan terrain telemetry: mode={} raster=disabled nodes={} revision={} static-ready={} captured={} layers={}/{} capacity={} fallback={} invalid={} invalid-indices={}",
-                      WantsDedicatedTerrainOpaque() ? "dedicated-capture" : "legacy-segments",
-                      _terrainVk.VisibleNodes().size(), _terrainVk.Revision(), _terrainVk.Ready(),
-                      frame.terrainOpaque.has_value(), terrainTelemetry.boundLayers, terrainTelemetry.requestedLayers,
+                      "Vulkan terrain telemetry: mode={} resources={} nodes={} revision={} static-ready={} visual-ready={} captured={} layers={}/{} capacity={} fallback={} invalid={} invalid-indices={}",
+                       WantsDedicatedTerrainOpaque() ? "dedicated" : "legacy-segments",
+                       WantsTerrainOpaqueCapture() ? "staged" : "off",
+                       _terrainVk.VisibleNodes().size(), _terrainVk.Revision(), _terrainVk.Ready(),
+                       _terrainVk.VisualInputsReady(), frame.terrainOpaque.has_value() || _capturedTerrainOpaque.has_value(),
+                       terrainTelemetry.boundLayers, terrainTelemetry.requestedLayers,
                       terrainTelemetry.capacity, terrainTelemetry.fallbackLayers, terrainTelemetry.invalidLayers,
                       terrainTelemetry.invalidLayerIndices);
             LOG_INFO(Graphics,
@@ -5288,6 +5295,16 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     if (ProceduralSkyActive() && !RecordSkyMapBake(commandBuffer))
         return false;
 
+    // Heightfield self-shadow is a separate long-range receiver mask, not a
+    // replacement for the CSM depth submission above.  Record it before any
+    // render pass can sample set-2 binding 0; TerrainVK performs the explicit
+    // storage-write -> fragment-read barrier and skips unchanged sun frames.
+    if (_terrainVk.Ready())
+    {
+        const float* sunTravel = _lastFrameConstants.sunDirection;
+        _terrainVk.RecordSelfShadowPass(commandBuffer, -sunTravel[0], -sunTravel[1], -sunTravel[2]);
+    }
+
     // Compute writes compact VkDrawIndexedIndirectCommand streams before the
     // render pass.  The explicit compute->indirect barrier lives in this call.
     RecordGpuSceneCull(commandBuffer);
@@ -6453,9 +6470,17 @@ bool EngineVK::WantsDedicatedTerrainOpaque() const
     return _terrainDescriptorIndexingSupported && _terrainVk.Ready() && _terrainVk.RasterPipelineReady();
 }
 
+bool EngineVK::WantsTerrainOpaqueCapture() const
+{
+    // This captures immutable map data for TerrainVK's resource producers while
+    // preserving legacy segments until every visual descriptor is genuinely
+    // ready. It is intentionally broader than WantsDedicatedTerrainOpaque().
+    return _terrainDescriptorIndexingSupported && _terrainVk.Ready();
+}
+
 bool EngineVK::CaptureDedicatedTerrainOpaque(const render::frame::TerrainOpaque& terrain)
 {
-    if (!WantsDedicatedTerrainOpaque() || !terrain.Valid())
+    if (!WantsTerrainOpaqueCapture() || !terrain.Valid())
         return false;
 
     // TerrainOpaque is the frame-owned value contract. Copy it before the
@@ -6466,7 +6491,7 @@ bool EngineVK::CaptureDedicatedTerrainOpaque(const render::frame::TerrainOpaque&
 
 bool EngineVK::GetDedicatedTerrainOpaque(render::frame::TerrainOpaque& terrain) const
 {
-    if (!_capturedTerrainOpaque || !_capturedTerrainOpaque->Valid())
+    if (!WantsDedicatedTerrainOpaque() || !_capturedTerrainOpaque || !_capturedTerrainOpaque->Valid())
         return false;
 
     terrain = *_capturedTerrainOpaque;

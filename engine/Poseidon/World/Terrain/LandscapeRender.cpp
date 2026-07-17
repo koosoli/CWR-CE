@@ -1270,7 +1270,7 @@ const int NGrassModes = sizeof(GrassModes) / sizeof(*GrassModes);
 
 bool Landscape::CaptureDedicatedTerrainOpaque(const LandBegEnd& visibleRect)
 {
-    if (GEngine == nullptr || !GEngine->ConsumesRenderFramePlan() || !GEngine->WantsDedicatedTerrainOpaque())
+    if (GEngine == nullptr || !GEngine->ConsumesRenderFramePlan() || !GEngine->WantsTerrainOpaqueCapture())
         return false;
 
     render::frame::TerrainOpaque terrain;
@@ -1318,7 +1318,11 @@ bool Landscape::CaptureDedicatedTerrainOpaque(const LandBegEnd& visibleRect)
     for (int layer = 0; layer < _texture.Size(); ++layer)
         terrain.textureLayers.push_back({GEngine->TerrainTextureResourceId(_texture[layer].texture)});
 
-    return terrain.Valid() && GEngine->CaptureDedicatedTerrainOpaque(terrain);
+    const bool captured = terrain.Valid() && GEngine->CaptureDedicatedTerrainOpaque(terrain);
+    // A successful resource-only capture must never suppress the established
+    // segment receiver. That happens only after the backend advertises a fully
+    // drawable dedicated terrain path.
+    return captured && GEngine->WantsDedicatedTerrainOpaque();
 }
 
 void Landscape::DrawGround(const LandBegEnd& bigRect, Scene& scene, const GroundLayerInfo& layer)

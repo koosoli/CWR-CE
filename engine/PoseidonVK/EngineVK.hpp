@@ -64,6 +64,7 @@ class EngineVK : public EngineDummy
     std::uint32_t RetainShadowCasterMesh(const Shape& shape, bool dynamic) override;
     std::uint32_t ShadowCasterTextureResourceId(Texture* texture) override;
     bool WantsDedicatedTerrainOpaque() const override;
+    bool WantsTerrainOpaqueCapture() const override;
     bool CaptureDedicatedTerrainOpaque(const render::frame::TerrainOpaque& terrain) override;
     bool GetDedicatedTerrainOpaque(render::frame::TerrainOpaque& terrain) const override;
     std::uint32_t TerrainTextureResourceId(Texture* texture) override;

@@ -54,11 +54,12 @@ set(POSEIDON_VK_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthGpu.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthGpuAlpha.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthGpuAlpha.frag.glsl
-    # Dedicated terrain is intentionally compiled and embedded independently
-    # of its activation.  TerrainVK owns the set-1 map/layer layout; set 2 is
-    # reserved for the visual inputs that are not available yet.
+    # Dedicated terrain is compiled independently of activation. TerrainVK owns
+    # its set-1 maps/layers, set-2 derived self-shadow/sky-visibility maps, and
+    # the compute sweep that populates the former.
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/terrain.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/terrain.frag.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/terrain_shadow.comp.glsl
 )
 
 set(POSEIDON_VK_GENERATED_SHADER_HEADERS)

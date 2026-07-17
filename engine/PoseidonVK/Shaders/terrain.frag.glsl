@@ -67,6 +67,16 @@ layout(set = 2, binding = 3) uniform sampler2D terrainSkyVisibility;
 const uint kTransitionBit = 0x8000u;
 const uint kLayerMask = 0x7fffu;
 
+// Fine heightfield sample used by the ceiling comparison.  This is kept in the
+// fragment stage (rather than consuming the CDLOD-interpolated y) so distant
+// node morphing cannot turn into patch-sized shadow flicker.
+float HeightAt(vec2 worldXZ)
+{
+    vec2 texel = vec2(terrain.dimensions.xy - uvec2(1u));
+    vec2 uv = (worldXZ - terrain.worldOrigin) / max(terrain.terrainGrid * texel, vec2(0.0001));
+    return texture(heightmap, clamp(uv, vec2(0.0), vec2(1.0))).r;
+}
+
 vec4 SampleNativeLayer(uint layer, vec2 uv, bool transition)
 {
     // TextureVK descriptors retain native sampler state.  The captured
@@ -96,12 +106,15 @@ float CascadeShadow(vec3 worldPosition)
     return texture(shadowMap, vec4(uv, float(cascade), p.z - bias));
 }
 
-vec3 TerrainLighting(vec3 normal)
+vec3 TerrainLighting(vec3 normal, float directVisibility, float skyVisibility)
 {
     vec3 n = normalize(normal);
-    vec3 light = vec3(0.35);
+    // The sky-view mask attenuates only ambient light.  CSM and the terrain
+    // heightfield sweep attenuate only the direct sun; local lights remain
+    // independent receivers just as they do in the WGPU reference.
+    vec3 light = vec3(0.35 * skyVisibility);
     if (frame.lightingParams.x > 0.5)
-        light += vec3(max(dot(n, -normalize(frame.sunDirection.xyz)), 0.0) * 0.65);
+        light += vec3(max(dot(n, -normalize(frame.sunDirection.xyz)), 0.0) * 0.65 * directVisibility);
     int count = min(int(frame.lightingParams.y + 0.5), 8);
     for (int i = 0; i < count; ++i)
     {
@@ -134,11 +147,24 @@ void main()
     vec4 blend = texture(terrainBlend, detailUv);
     albedo.rgb *= mix(vec3(1.0), clamp(detail.rgb * 2.0, vec3(0.0), vec3(2.0)), blend.a);
 
-    float csm = CascadeShadow(vWorldPos);
-    float selfShadow = texture(terrainSelfShadow, detailUv).r;
-    float skyVisibility = texture(terrainSkyVisibility, detailUv).r;
-    vec3 color = albedo.rgb * TerrainLighting(vWorldNormal);
-    color *= mix(vec3(0.16), vec3(1.0), csm * selfShadow * skyVisibility);
+    // The self-shadow resource is world-aligned and deliberately has an
+    // extended (normally 2x) grid.  It stores a ceiling rather than a baked
+    // scalar: use the fine heightfield sample to keep the test independent of
+    // CDLOD morphing, then compose terrain occlusion and CSM by max().
+    vec2 maskDims = vec2(textureSize(terrainSelfShadow, 0));
+    vec2 maskScale = maskDims / vec2(terrain.dimensions.xy);
+    vec2 maskCoord = (vWorldPos.xz - terrain.worldOrigin) / terrain.terrainGrid * maskScale;
+    vec4 shadowSample = texture(terrainSelfShadow, (maskCoord + vec2(0.5)) / maskDims);
+    float fineHeight = HeightAt(vWorldPos.xz);
+    float selfLit = smoothstep(shadowSample.r - shadowSample.g,
+                               shadowSample.r + shadowSample.g + 0.001, fineHeight);
+    float terrainOcclusion = clamp(shadowSample.b * (1.0 - selfLit), 0.0, 1.0);
+    float csmOcclusion = 1.0 - CascadeShadow(vWorldPos);
+    float directVisibility = 1.0 - max(csmOcclusion, terrainOcclusion);
+    vec2 skyDims = vec2(textureSize(terrainSkyVisibility, 0));
+    vec2 skyCoord = (vWorldPos.xz - terrain.worldOrigin) / terrain.terrainGrid;
+    float skyVisibility = texture(terrainSkyVisibility, (skyCoord + vec2(0.5)) / skyDims).r;
+    vec3 color = albedo.rgb * TerrainLighting(vWorldNormal, directVisibility, skyVisibility);
 
     // Wet band follows the captured sea-level parameters and is applied before
     // fog/HDR composition, preserving linear lighting for the world target.
