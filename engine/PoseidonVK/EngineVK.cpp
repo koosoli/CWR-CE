@@ -569,11 +569,26 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
             !CreateGpuSceneResources() ||
              !CreateSkyMapPipelineLayout() ||
             (_volumetricCloudsEnabled && (!CreateVolumetricCloudPipelineLayout() || !CreateCloudComputePipelineLayouts())) ||
-           (WorldCompositionActive() && !CreateWorldCompositePipelineLayout()) ||
-            (_temporalExposureEnabled && !CreateEyeAdaptationPipelineLayout()) || !CreateCommandPool() ||
-           !CreateSkyMapResources() || !CreateSkyMapDescriptorSet() ||
-          !CreateSwapchain() ||
-            (_volumetricCloudsEnabled && (!CreateVolumetricCloudDescriptorSet() || !CreateCloudComputeDescriptorSets())) ||
+             (WorldCompositionActive() && !CreateWorldCompositePipelineLayout()) ||
+              (_temporalExposureEnabled && !CreateEyeAdaptationPipelineLayout()) || !CreateCommandPool())
+    {
+        Shutdown();
+        return false;
+    }
+
+    // TerrainVK owns immutable map resources and its one-shot map uploads use
+    // this pool. It is deliberately optional: failure leaves the established
+    // segment path active instead of making Vulkan startup depend on a raster
+    // path that is not installed yet.
+    if (_terrainDescriptorIndexingSupported &&
+        !_terrainVk.Initialize(_physicalDevice, _device, _commandPool, _graphicsQueue))
+    {
+        LOG_WARN(Graphics, "Vulkan terrain telemetry: mode=legacy-segments reason=TerrainVK-initialization-failed");
+    }
+
+    if (!CreateSkyMapResources() || !CreateSkyMapDescriptorSet() ||
+           !CreateSwapchain() ||
+             (_volumetricCloudsEnabled && (!CreateVolumetricCloudDescriptorSet() || !CreateCloudComputeDescriptorSets())) ||
            (_temporalExposureEnabled && !CreateEyeAdaptationDescriptorSet()) ||
            (WorldCompositionActive() && !CreateWorldCompositeDescriptorSet()) ||
           !CreateBootstrapPipeline() || !CreateScenePipeline() || !CreateProceduralSkyPipeline() ||
@@ -615,11 +630,14 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
              _height, static_cast<int>(_windowMode), _graphicsQueueFamily, _presentQueueFamily);
     LOG_WARN(Graphics, "Vulkan: scene raster parity is in progress; water and some legacy clipped geometry may differ "
                         "from the GL33 renderer.");
-    // Deliberately explicit: the frame/selection groundwork exists, but the
-    // TerrainVK descriptor-indexed raster + compute passes are not installed
-    // in this milestone.  Do not advertise the generic segment path as CDLOD.
-    LOG_WARN(Graphics, "Vulkan terrain telemetry: mode=legacy-segments reason=TerrainVK-not-installed "
-                       "dedicated-nodes=0 dedicated-batches=0 legacy-draws=tracked-by-FramePlan");
+    // This milestone captures and uploads the immutable map, but intentionally
+    // does not install a dedicated terrain raster pass yet.
+    if (WantsDedicatedTerrainOpaque())
+        LOG_INFO(Graphics, "Vulkan terrain telemetry: mode=dedicated-capture raster=disabled descriptor-indexing=true "
+                           "params-buffer={}", _terrainVk.ParamsBuffer().buffer != VK_NULL_HANDLE);
+    else
+        LOG_WARN(Graphics, "Vulkan terrain telemetry: mode=legacy-segments reason={}",
+                 _terrainDescriptorIndexingSupported ? "TerrainVK-not-ready" : "descriptor-indexing-unsupported");
     if (_proceduralSkyEnabled)
         LOG_INFO(Graphics, "Vulkan: HDR cached sky map is enabled");
     if (_volumetricCloudsEnabled)
@@ -788,8 +806,11 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
                        _gpuSceneCapabilities.drawIndirectCount ? "indirect-count" : "fixed-indirect",
                        _shadowCascadeDrawCounts[0], _shadowCascadeDrawCounts[1], _shadowCascadeDrawCounts[2],
                         _shadowCascadeDrawCounts[3], _shadowResolvedDrawCount);
-            LOG_INFO(Graphics, "Vulkan terrain telemetry: mode=legacy-segments nodes={} revision={} static-ready={}",
-                     _terrainVk.VisibleNodes().size(), _terrainVk.Revision(), _terrainVk.Ready());
+            LOG_INFO(Graphics,
+                     "Vulkan terrain telemetry: mode={} raster=disabled nodes={} revision={} static-ready={} captured={}",
+                     WantsDedicatedTerrainOpaque() ? "dedicated-capture" : "legacy-segments",
+                     _terrainVk.VisibleNodes().size(), _terrainVk.Revision(), _terrainVk.Ready(),
+                     frame.terrainOpaque.has_value());
             LOG_INFO(Graphics,
                      "Vulkan CPU ms: submit={:.2f} gpu-scene-input={:.2f} shadow-record={:.2f} shadow-prepare={:.2f} shadow-secondary={:.2f} command-record={:.2f} fence-wait={:.2f}",
                      _cpuSubmitFramePlanMs, _cpuGpuSceneInputMs, _cpuShadowRecordMs, _cpuShadowPrepareMs,
@@ -6408,6 +6429,41 @@ std::uint32_t EngineVK::ShadowCasterTextureResourceId(Texture* texture)
     return GetOrCreateTextureResourceId(texture);
 }
 
+bool EngineVK::WantsDedicatedTerrainOpaque() const
+{
+    // A snapshot replaces legacy segments in BuildFrame, so advertise it only
+    // after both the negotiated descriptor-array feature and TerrainVK's owned
+    // resources are live.
+    return _terrainDescriptorIndexingSupported && _terrainVk.Ready();
+}
+
+bool EngineVK::CaptureDedicatedTerrainOpaque(const render::frame::TerrainOpaque& terrain)
+{
+    if (!WantsDedicatedTerrainOpaque() || !terrain.Valid())
+        return false;
+
+    // TerrainOpaque is the frame-owned value contract. Copy it before the
+    // landscape's working vectors can be reused by the next draw operation.
+    _capturedTerrainOpaque = terrain;
+    return true;
+}
+
+bool EngineVK::GetDedicatedTerrainOpaque(render::frame::TerrainOpaque& terrain) const
+{
+    if (!_capturedTerrainOpaque || !_capturedTerrainOpaque->Valid())
+        return false;
+
+    terrain = *_capturedTerrainOpaque;
+    return true;
+}
+
+std::uint32_t EngineVK::TerrainTextureResourceId(Texture* texture)
+{
+    // Terrain layers share the normal texture registry and fallback guarantee;
+    // descriptor-array setup will consume these same stable resource ids.
+    return GetOrCreateTextureResourceId(texture);
+}
+
 std::uint32_t EngineVK::RetainShadowCasterMesh(const Shape& shape, bool dynamic)
 {
     if (!_device || shape.NVertex() <= 0)
@@ -6652,6 +6708,7 @@ void EngineVK::InitDraw(bool clear, PackedColor color)
     if (_textBank)
         _textBank->StartFrame();
     _drawItems.clear();
+    _capturedTerrainOpaque.reset();
     _currentDrawItem = DrawItem{};
     _screenVertices.clear();
     _screenIndices.clear();

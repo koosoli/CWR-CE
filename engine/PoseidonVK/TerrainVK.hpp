@@ -41,6 +41,9 @@ class TerrainVK
     const ImageVK& Heightmap() const noexcept { return _heightmap; }
     const ImageVK& IndexMap() const noexcept { return _indexMap; }
     const ImageVK& JitterMap() const noexcept { return _jitterMap; }
+    // Kept separate from Parameters(): descriptor setup must bind the actual
+    // GPU allocation, not a transient CPU Params snapshot.
+    const BufferVK& ParamsBuffer() const noexcept { return _paramsBuffer; }
     const Params& Parameters() const noexcept { return _params; }
 
   private:

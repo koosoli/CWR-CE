@@ -20,6 +20,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -62,6 +63,10 @@ class EngineVK : public EngineDummy
     const std::vector<DrawItem>* GetRecordedDraws() const override { return &_drawItems; }
     std::uint32_t RetainShadowCasterMesh(const Shape& shape, bool dynamic) override;
     std::uint32_t ShadowCasterTextureResourceId(Texture* texture) override;
+    bool WantsDedicatedTerrainOpaque() const override;
+    bool CaptureDedicatedTerrainOpaque(const render::frame::TerrainOpaque& terrain) override;
+    bool GetDedicatedTerrainOpaque(render::frame::TerrainOpaque& terrain) const override;
+    std::uint32_t TerrainTextureResourceId(Texture* texture) override;
     void PrepareTriangleTL(const MipInfo& mip, const render::LegacySpec& spec) override;
     void PrepareMeshTL(const LightList& lights, const Matrix4& modelToWorld, const render::LegacySpec& spec) override;
     void SetGrassParams(float a1, float a2, float a3 = 0, float a4 = 0) override;
@@ -406,6 +411,9 @@ class EngineVK : public EngineDummy
     bool _gpuSceneEnabled = false;
     bool _terrainDescriptorIndexingSupported = false;
     vk::TerrainVK _terrainVk;
+    // Reset at InitDraw and retained through SceneExtractor/BuildFrame so the
+    // immutable terrain snapshot cannot leak into a later frame.
+    std::optional<render::frame::TerrainOpaque> _capturedTerrainOpaque;
     bool _debugUtilsEnabled = false;
     bool _proceduralSkyEnabled = false;
     bool _skyMapDirty = true;
