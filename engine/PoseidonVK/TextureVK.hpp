@@ -69,6 +69,13 @@ public:
     // recorded ahead of the scene pass on the frame command buffer.
     bool IsGpuReadyForSampling() const noexcept { return _gpuReadyForSampling; }
 
+    // Returns the native image/sampler pair without exposing ownership.  This
+    // is intentionally independent of IsGpuReadyForSampling(): descriptor
+    // writers use the latter to decide whether a source is eligible, while a
+    // known fallback may be queued for upload in the current frame and still
+    // needs a valid descriptor payload.
+    bool GetSampledImageInfo(VkDescriptorImageInfo& out) const noexcept;
+
 private:
     struct PendingMipUpload
     {

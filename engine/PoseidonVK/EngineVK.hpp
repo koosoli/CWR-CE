@@ -255,6 +255,7 @@ class EngineVK : public EngineDummy
     bool CreateTextureDescriptorLayout();
     bool CreateTextureDescriptorPool();
     void DestroyTextureDescriptorResources();
+    bool UpdateTerrainLayerDescriptors(const render::frame::TerrainOpaque& terrain);
 
     SDL_Window* _window = nullptr;
     VkInstance _instance = VK_NULL_HANDLE;

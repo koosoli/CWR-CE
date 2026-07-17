@@ -508,6 +508,18 @@ void TextureVK::DiscardPendingUpload() noexcept
     _uploadRecorded = false;
 }
 
+bool TextureVK::GetSampledImageInfo(VkDescriptorImageInfo& out) const noexcept
+{
+    if (_image.view == VK_NULL_HANDLE || _sampler == VK_NULL_HANDLE)
+        return false;
+
+    out = {};
+    out.sampler = _sampler;
+    out.imageView = _image.view;
+    out.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    return true;
+}
+
 VkDescriptorSet TextureVK::GetDescriptorSet() const
 {
     if (_descriptorSet && (_gpuReadyForSampling || _uploadRecorded || _resourceId == kFallbackResourceId))

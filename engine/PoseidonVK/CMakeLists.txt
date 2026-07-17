@@ -17,6 +17,7 @@ set(POSEIDON_VK_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/RenderStateVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/SceneDrawCommandsVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ScenePushConstantsVK.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ShaderCompilerVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TextBankVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TerrainVK.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/TextureVK.hpp
@@ -53,6 +54,11 @@ set(POSEIDON_VK_SHADER_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthGpu.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthGpuAlpha.vert.glsl
     ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/shadowDepthGpuAlpha.frag.glsl
+    # Dedicated terrain is intentionally compiled and embedded independently
+    # of its activation.  TerrainVK owns the set-1 map/layer layout; set 2 is
+    # reserved for the visual inputs that are not available yet.
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/terrain.vert.glsl
+    ${CMAKE_CURRENT_SOURCE_DIR}/Shaders/terrain.frag.glsl
 )
 
 set(POSEIDON_VK_GENERATED_SHADER_HEADERS)

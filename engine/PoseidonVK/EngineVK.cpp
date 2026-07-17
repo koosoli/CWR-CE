@@ -712,14 +712,23 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
         if (_terrainVk.Upload(*frame.terrainOpaque))
         {
             const auto& terrain = *frame.terrainOpaque;
-            _terrainVk.Select(frame.cameraPosition[0], frame.cameraPosition[1], frame.cameraPosition[2],
-                              terrain.visibleXBegin * terrain.landGrid, terrain.visibleZBegin * terrain.landGrid,
-                              terrain.visibleXEnd * terrain.landGrid, terrain.visibleZEnd * terrain.landGrid);
+            if (UpdateTerrainLayerDescriptors(terrain))
+            {
+                _terrainVk.Select(frame.cameraPosition[0], frame.cameraPosition[1], frame.cameraPosition[2],
+                                  terrain.visibleXBegin * terrain.landGrid, terrain.visibleZBegin * terrain.landGrid,
+                                  terrain.visibleXEnd * terrain.landGrid, terrain.visibleZEnd * terrain.landGrid);
+            }
+            else
+            {
+                LOG_WARN(Graphics, "Vulkan terrain telemetry: descriptor update failed revision={}; raster remains disabled",
+                         terrain.revision);
+            }
         }
         else
         {
-            LOG_WARN(Graphics, "Vulkan terrain telemetry: resource upload failed revision={}; legacy renderer remains authoritative",
-                     frame.terrainOpaque->revision);
+            LOG_WARN(Graphics,
+                     "Vulkan terrain telemetry: resource upload failed revision={} invalid-indices={}; legacy renderer remains authoritative",
+                     frame.terrainOpaque->revision, _terrainVk.Telemetry().invalidLayerIndices);
         }
     }
 
@@ -806,11 +815,14 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
                        _gpuSceneCapabilities.drawIndirectCount ? "indirect-count" : "fixed-indirect",
                        _shadowCascadeDrawCounts[0], _shadowCascadeDrawCounts[1], _shadowCascadeDrawCounts[2],
                         _shadowCascadeDrawCounts[3], _shadowResolvedDrawCount);
+            const vk::TerrainVK::DescriptorTelemetry& terrainTelemetry = _terrainVk.Telemetry();
             LOG_INFO(Graphics,
-                     "Vulkan terrain telemetry: mode={} raster=disabled nodes={} revision={} static-ready={} captured={}",
-                     WantsDedicatedTerrainOpaque() ? "dedicated-capture" : "legacy-segments",
-                     _terrainVk.VisibleNodes().size(), _terrainVk.Revision(), _terrainVk.Ready(),
-                     frame.terrainOpaque.has_value());
+                      "Vulkan terrain telemetry: mode={} raster=disabled nodes={} revision={} static-ready={} captured={} layers={}/{} capacity={} fallback={} invalid={} invalid-indices={}",
+                      WantsDedicatedTerrainOpaque() ? "dedicated-capture" : "legacy-segments",
+                      _terrainVk.VisibleNodes().size(), _terrainVk.Revision(), _terrainVk.Ready(),
+                      frame.terrainOpaque.has_value(), terrainTelemetry.boundLayers, terrainTelemetry.requestedLayers,
+                      terrainTelemetry.capacity, terrainTelemetry.fallbackLayers, terrainTelemetry.invalidLayers,
+                      terrainTelemetry.invalidLayerIndices);
             LOG_INFO(Graphics,
                      "Vulkan CPU ms: submit={:.2f} gpu-scene-input={:.2f} shadow-record={:.2f} shadow-prepare={:.2f} shadow-secondary={:.2f} command-record={:.2f} fence-wait={:.2f}",
                      _cpuSubmitFramePlanMs, _cpuGpuSceneInputMs, _cpuShadowRecordMs, _cpuShadowPrepareMs,
@@ -1019,9 +1031,10 @@ bool EngineVK::PickPhysicalDevice()
         _gpuSceneCapabilities.shaderDrawParameters = features11.shaderDrawParameters == VK_TRUE;
         _gpuSceneCapabilities.drawIndirectCount = features12.drawIndirectCount == VK_TRUE;
         _terrainDescriptorIndexingSupported = features12.descriptorIndexing == VK_TRUE &&
-                                              features12.runtimeDescriptorArray == VK_TRUE &&
-                                              features12.descriptorBindingPartiallyBound == VK_TRUE &&
-                                              features12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
+                                               features12.runtimeDescriptorArray == VK_TRUE &&
+                                               features12.descriptorBindingPartiallyBound == VK_TRUE &&
+                                               features12.descriptorBindingVariableDescriptorCount == VK_TRUE &&
+                                               features12.shaderSampledImageArrayNonUniformIndexing == VK_TRUE;
         _maxSamplerAnisotropy = selectedProps.limits.maxSamplerAnisotropy;
         _timestampPeriodNs = selectedProps.limits.timestampPeriod;
 
@@ -1073,6 +1086,7 @@ bool EngineVK::CreateDevice()
         features12.descriptorIndexing = VK_TRUE;
         features12.runtimeDescriptorArray = VK_TRUE;
         features12.descriptorBindingPartiallyBound = VK_TRUE;
+        features12.descriptorBindingVariableDescriptorCount = VK_TRUE;
         features12.shaderSampledImageArrayNonUniformIndexing = VK_TRUE;
     }
     features11.pNext = &features12;
@@ -6431,10 +6445,12 @@ std::uint32_t EngineVK::ShadowCasterTextureResourceId(Texture* texture)
 
 bool EngineVK::WantsDedicatedTerrainOpaque() const
 {
-    // A snapshot replaces legacy segments in BuildFrame, so advertise it only
-    // after both the negotiated descriptor-array feature and TerrainVK's owned
-    // resources are live.
-    return _terrainDescriptorIndexingSupported && _terrainVk.Ready();
+    // Capturing TerrainOpaque replaces the legacy receiver in BuildFrame. Do
+    // not advertise it while TerrainVK has only map resources: that would make
+    // terrain disappear rather than render with incomplete CSM/self-shadow and
+    // visual-input bindings. CreateRasterPipeline() itself refuses to create
+    // the pipeline until those inputs are declared complete.
+    return _terrainDescriptorIndexingSupported && _terrainVk.Ready() && _terrainVk.RasterPipelineReady();
 }
 
 bool EngineVK::CaptureDedicatedTerrainOpaque(const render::frame::TerrainOpaque& terrain)
@@ -6696,6 +6712,45 @@ TextureVK* EngineVK::ResolveTexture(std::uint32_t id) const
     if (it != _textureRegistry.end())
         return it->second;
     return nullptr;
+}
+
+bool EngineVK::UpdateTerrainLayerDescriptors(const render::frame::TerrainOpaque& terrain)
+{
+    if (!_fallbackWhiteTexture)
+        return false;
+
+    VkDescriptorImageInfo fallbackImage{};
+    // The fallback's upload may be queued on the first frame. Its descriptor
+    // payload is still valid and RecordPendingTextureUploads places that
+    // transition before any future terrain draw on this queue.
+    if (!_fallbackWhiteTexture->GetSampledImageInfo(fallbackImage))
+        return false;
+
+    std::vector<vk::TerrainVK::LayerBinding> layers;
+    layers.reserve(terrain.textureLayers.size());
+    for (const render::frame::TextureHandle handle : terrain.textureLayers)
+    {
+        vk::TerrainVK::LayerBinding layer;
+        TextureVK* source = ResolveTexture(handle.id);
+        VkDescriptorImageInfo sourceImage{};
+        const bool sourceReady = source && source != _fallbackWhiteTexture.GetRef() &&
+                                 source->IsGpuReadyForSampling() && source->GetSampledImageInfo(sourceImage);
+        if (sourceReady)
+        {
+            layer.image = sourceImage;
+        }
+        else
+        {
+            layer.image = fallbackImage;
+            layer.usesFallback = true;
+            // A captured id which no longer resolves, or whose native image
+            // has become unusable, is invalid. A live upload is valid but is
+            // deterministically represented by fallback until it is ready.
+            layer.sourceValid = source != nullptr && source->GetSampledImageInfo(sourceImage);
+        }
+        layers.push_back(layer);
+    }
+    return _terrainVk.UpdateLayerDescriptors(layers);
 }
 
 void EngineVK::InitDraw(bool clear, PackedColor color)
