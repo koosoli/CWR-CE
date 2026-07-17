@@ -26,6 +26,7 @@
 #include <Poseidon/World/MapTypes.hpp>
 #include <stdio.h>
 #include <cmath>
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <Poseidon/Foundation/Containers/Array.hpp>
@@ -43,6 +44,15 @@ extern bool DisableTextures;
 
 namespace Poseidon
 {
+
+namespace
+{
+bool ResidencyDiagnosticsEnabled()
+{
+    const char* value = std::getenv("POSEIDON_VK_RESIDENCY_DIAG");
+    return value && *value != '0';
+}
+} // namespace
 
 #ifdef _MSC_VER
 #pragma warning(disable : 4355)
@@ -270,6 +280,9 @@ LODShapeWithShadow* ShapeBank::New(const char* name, bool reversed, bool shadow)
         shape->OrSpecial(NoShadow);
     }
     _cache.Insert(cacheKey, Link<LODShapeWithShadow>(shape));
+
+    if (ResidencyDiagnosticsEnabled())
+        LOG_INFO(Graphics, "VK residency: shape-load '{}' ({} LODs)", lowName, shape->NLevels());
 
     const double _perfShapeLoadMs = ::Poseidon::Dev::Perf::ElapsedMs(_perfShapeLoadStart);
     if (_perfShapeLoadMs >= 1.0)

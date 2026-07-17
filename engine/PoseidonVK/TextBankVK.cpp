@@ -4,10 +4,21 @@
 #include <Poseidon/IO/ParamFile/ParamFile.hpp>
 #include <Poseidon/IO/Streams/QBStream.hpp>
 
+#include <cstdlib>
+
 extern ParamFile Remaster;
 
 namespace Poseidon
 {
+
+namespace
+{
+bool ResidencyDiagnosticsEnabled()
+{
+    const char* value = std::getenv("POSEIDON_VK_RESIDENCY_DIAG");
+    return value && *value != '0';
+}
+} // namespace
 
 TextBankVK::TextBankVK(EngineVK& engine)
     : _engine(engine)
@@ -52,6 +63,8 @@ Ref<Texture> TextBankVK::Load(RStringB name)
     TextureVK* tex = new TextureVK(_engine);
     _textures[slot] = tex;
     tex->SetName(name);
+    if (ResidencyDiagnosticsEnabled())
+        LOG_INFO(Graphics, "VK residency: texture-load '{}'", static_cast<const char*>(name));
     tex->Init(name);
     return tex;
 }

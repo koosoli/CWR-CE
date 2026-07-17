@@ -47,6 +47,7 @@
 #include <Poseidon/World/Scene/Camera/Camera.hpp>
 
 #include <Poseidon/World/Entities/Weapons/Shots.hpp>
+#include <Poseidon/World/Entities/Weapons/Weapons.hpp>
 #include <Poseidon/AI/AI.hpp>
 
 #include <Poseidon/IO/Serialization/ThreadSync.hpp>
@@ -86,6 +87,112 @@ extern const char DefLoadFile[];
 #endif
 
 #define BACKGROUND_AI 0
+
+namespace
+{
+class MissionAssetLease
+{
+    AutoArray<const EntityType*> _types;
+    AutoArray<const WeaponType*> _weapons;
+    AutoArray<const MagazineType*> _magazines;
+
+    template <class Type>
+    static bool Contains(const AutoArray<const Type*>& types, const Type* type)
+    {
+        for (int i = 0; i < types.Size(); ++i)
+        {
+            if (types[i] == type)
+                return true;
+        }
+        return false;
+    }
+
+    void AcquireWeapon(const WeaponType* weapon)
+    {
+        if (!weapon || Contains(_weapons, weapon))
+            return;
+
+        weapon->ShapeAddRef();
+        _weapons.Add(weapon);
+    }
+
+    void AcquireMagazine(const MagazineType* magazine)
+    {
+        if (!magazine || Contains(_magazines, magazine))
+            return;
+
+        magazine->AmmoAddRef();
+        magazine->MagazineShapeAddRef();
+        _magazines.Add(magazine);
+    }
+
+  public:
+    void Acquire(const EntityType* type)
+    {
+        if (!type || Contains(_types, type))
+            return;
+
+        type->VehicleAddRef();
+        _types.Add(type);
+
+        const EntityAIType* aiType = dynamic_cast<const EntityAIType*>(type);
+        if (!aiType)
+            return;
+
+        for (int i = 0; i < aiType->NWeaponSystems(); ++i)
+            AcquireWeapon(aiType->GetWeaponSystem(i));
+        for (int i = 0; i < aiType->NMagazines(); ++i)
+            AcquireMagazine(aiType->GetMagazine(i));
+
+        const WeaponCargo& weaponCargo = aiType->GetWeaponCargo();
+        for (int i = 0; i < weaponCargo.Size(); ++i)
+            AcquireWeapon(weaponCargo[i].weapon);
+
+        const MagazineCargo& magazineCargo = aiType->GetMagazineCargo();
+        for (int i = 0; i < magazineCargo.Size(); ++i)
+            AcquireMagazine(magazineCargo[i].magazine);
+    }
+
+    void Release()
+    {
+        for (int i = 0; i < _magazines.Size(); ++i)
+        {
+            _magazines[i]->MagazineShapeRelease();
+            _magazines[i]->AmmoRelease();
+        }
+        for (int i = 0; i < _weapons.Size(); ++i)
+            _weapons[i]->ShapeRelease();
+        for (int i = 0; i < _types.Size(); ++i)
+            _types[i]->VehicleRelease();
+    }
+};
+
+void AcquireMissionAssets(MissionAssetLease& assets, const ArcadeTemplate& templateInfo)
+{
+    const auto acquireUnit = [&assets](const ArcadeUnitInfo& unit)
+    {
+        assets.Acquire(unit.type ? static_cast<EntityType*>(unit.type) : VehicleTypes.New(unit.vehicle));
+    };
+    const auto acquireSensor = [&assets](const ArcadeSensorInfo& sensor)
+    {
+        if (sensor.object.GetLength() > 0)
+            assets.Acquire(VehicleTypes.New(sensor.object));
+    };
+
+    for (int i = 0; i < templateInfo.groups.Size(); ++i)
+    {
+        const ArcadeGroupInfo& group = templateInfo.groups[i];
+        for (int j = 0; j < group.units.Size(); ++j)
+            acquireUnit(group.units[j]);
+        for (int j = 0; j < group.sensors.Size(); ++j)
+            acquireSensor(group.sensors[j]);
+    }
+    for (int i = 0; i < templateInfo.emptyVehicles.Size(); ++i)
+        acquireUnit(templateInfo.emptyVehicles[i]);
+    for (int i = 0; i < templateInfo.sensors.Size(); ++i)
+        acquireSensor(templateInfo.sensors[i]);
+}
+} // namespace
 
 World::World(Engine* engine, bool editor)
     : _engine(engine), _editor(editor), _camTypeMain(CamInternal), _camType(CamInternal), _gridOffsetX(0),
@@ -547,6 +654,12 @@ bool World::InitVehicles(GameMode gameMode, ArcadeTemplate& t)
         _ui->ResetHUD();
     }
 
+    // Resolve all mission-owned render assets while the loading display is active.
+    // Entity construction below takes its own references before this lease is released.
+    MissionAssetLease missionAssets;
+    AcquireMissionAssets(missionAssets, t);
+    ProgressRefresh();
+
     if (!GDummyVehicle)
     {
         GDummyVehicle = NewVehicle("PaperCar");
@@ -705,6 +818,7 @@ bool World::InitVehicles(GameMode gameMode, ArcadeTemplate& t)
         _civilianCenter->InitSensors(true);
     }
     ProgressRefresh();
+    missionAssets.Release();
     VehicleTypes.UnlockAllTypes();
     GEngine->TextBank()->UnlockAllTextures();
     extern void ManCompact();

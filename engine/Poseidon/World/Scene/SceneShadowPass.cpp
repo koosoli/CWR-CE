@@ -65,6 +65,16 @@ void Scene::CaptureShadowMapFrameCasters(int nDraw)
             return;
 
         int firstIndex = 0;
+        ShadowCasterCapture capture;
+        bool hasCapture = false;
+        const auto flushCapture = [&]
+        {
+            if (hasCapture)
+            {
+                _shadowCasterCaptures.push_back(capture);
+                hasCapture = false;
+            }
+        };
         for (Offset o = shape->BeginFaces(); o < shape->EndFaces(); shape->NextFace(o))
         {
             const Poly& face = shape->Face(o);
@@ -75,21 +85,35 @@ void Scene::CaptureShadowMapFrameCasters(int nDraw)
             // alpha test, so this face still casts solid depth.
             if (mode == sm::CasterMode::AlphaTest && !texture)
                 mode = sm::CasterMode::Solid;
+
+            const bool cutout = mode == sm::CasterMode::AlphaTest;
+            const std::uint32_t alphaTextureResourceId =
+                cutout && indexCount > 0 ? GEngine->ShadowCasterTextureResourceId(texture) : 0;
             if (indexCount > 0 && mode != sm::CasterMode::Skip)
             {
-                ShadowCasterCapture capture;
-                capture.meshResourceId = meshId;
-                capture.modelToWorld = modelToWorld;
-                capture.indexBegin = firstIndex;
-                capture.indexCount = indexCount;
-                capture.cutout = mode == sm::CasterMode::AlphaTest;
-                capture.alphaTextureResourceId =
-                    capture.cutout ? GEngine->ShadowCasterTextureResourceId(texture) : 0;
-                capture.alphaCutoff = 0.5f; // EngineGL33 shadow alpha cutoff
-                _shadowCasterCaptures.push_back(capture);
+                const bool sameRun = hasCapture && capture.cutout == cutout &&
+                                     capture.alphaTextureResourceId == alphaTextureResourceId &&
+                                     capture.indexBegin + capture.indexCount == firstIndex;
+                if (sameRun)
+                    capture.indexCount += indexCount;
+                else
+                {
+                    flushCapture();
+                    capture.meshResourceId = meshId;
+                    capture.modelToWorld = modelToWorld;
+                    capture.indexBegin = firstIndex;
+                    capture.indexCount = indexCount;
+                    capture.cutout = cutout;
+                    capture.alphaTextureResourceId = alphaTextureResourceId;
+                    capture.alphaCutoff = 0.5f; // EngineGL33 shadow alpha cutoff
+                    hasCapture = true;
+                }
             }
+            else
+                flushCapture();
             firstIndex += indexCount;
         }
+        flushCapture();
     };
 
     for (int i = 0; i < nDraw; ++i)

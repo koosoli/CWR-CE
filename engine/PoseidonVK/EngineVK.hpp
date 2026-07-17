@@ -409,7 +409,7 @@ class EngineVK : public EngineDummy
     bool _skyMapValid = false;
     bool _volumetricCloudsEnabled = false;
     bool _cloudHistoryValid = false;
-    bool _hdrEnabled = false;
+    bool _hdrEnabled = true;
     bool _temporalExposureEnabled = false;
     float _hdrExposure = 1.0f;
     bool _eyeAdaptationHistoryValid = false;
