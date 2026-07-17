@@ -42,16 +42,13 @@ class TerrainVK
         kIndexMapBinding = 1,
         kJitterMapBinding = 2,
         kParamsBinding = 3,
-        kTextureLayersBinding = 4,
+        kRepeatSamplerBinding = 4,
+        kClampSamplerBinding = 5,
+        kTextureLayersBinding = 6,
     };
     struct LayerBinding
     {
         VkDescriptorImageInfo image = {};
-        // A missing/dead TextureHandle is invalid. A registered texture whose
-        // upload has not completed is valid, but uses the deterministic
-        // fallback for this descriptor update.
-        bool sourceValid = true;
-        bool usesFallback = false;
     };
     struct DescriptorTelemetry
     {
@@ -83,8 +80,8 @@ class TerrainVK
         float radiusMeters = 600.0f;
         std::uint32_t blurRadius = 1;
     };
-    // Set 2 is terrain-owned.  Bindings 0/3 are the derived maps; bindings
-    // 1/2 have no fallback and must be supplied by their real producers.
+    // Set 2 is terrain-owned. Bindings 0/2 are derived maps; binding 1 has no
+    // fallback and must be supplied by the real detail producer.
     struct RasterInputs
     {
         VkDescriptorSetLayout frameDescriptorSetLayout = VK_NULL_HANDLE; // set 0: FrameConstants + CSM
@@ -96,7 +93,6 @@ class TerrainVK
         bool csmBound = false;
         bool selfShadowBound = false;
         bool detailBound = false;
-        bool blendBound = false;
         bool skyVisibilityBound = false;
 
         bool Complete() const noexcept
@@ -104,7 +100,7 @@ class TerrainVK
             return frameDescriptorSetLayout != VK_NULL_HANDLE && visualDescriptorSetLayout != VK_NULL_HANDLE &&
                    frameDescriptorSet != VK_NULL_HANDLE && visualDescriptorSet != VK_NULL_HANDLE &&
                    renderPass != VK_NULL_HANDLE && extent.width != 0 && extent.height != 0 && csmBound &&
-                   selfShadowBound && detailBound && blendBound && skyVisibilityBound;
+                    selfShadowBound && detailBound && skyVisibilityBound;
         }
     };
     // Required bindings in the terrain-owned set 2. Keep these synchronized
@@ -113,22 +109,20 @@ class TerrainVK
     {
         kSelfShadowBinding = 0,
         kDetailBinding = 1,
-        kBlendBinding = 2,
-        kSkyVisibilityBinding = 3,
+        kSkyVisibilityBinding = 2,
     };
 
     bool Initialize(VkPhysicalDevice physicalDevice, VkDevice device, VkCommandPool commandPool, VkQueue queue);
     void Destroy(VkDevice device);
     bool Upload(const render::frame::TerrainOpaque& terrain);
     // Called by EngineVK after TextureHandle IDs have been resolved to native
-    // image/sampler pairs. No UPDATE_AFTER_BIND flag is needed: dedicated
-    // terrain rasterization is not installed, and future raster activation
-    // must update this set only after its prior use has completed.
+    // images. No UPDATE_AFTER_BIND flag is needed: dedicated terrain
+    // rasterization updates this set only after its prior use has completed.
     bool UpdateLayerDescriptors(const std::vector<LayerBinding>& layers);
-    // Detail and blend are source assets, not generated stand-ins.  Their
-    // descriptor information must name completed, shader-readable images.  The
-    // self-shadow and sky-visibility bindings are supplied by this object.
-    bool UpdateVisualDescriptors(const VkDescriptorImageInfo& detail, const VkDescriptorImageInfo& blend);
+    // Detail is a source asset, not a generated stand-in. Its descriptor must
+    // name a completed, shader-readable image. The self-shadow and sky
+    // visibility bindings are supplied by this object.
+    bool UpdateVisualDescriptors(const VkDescriptorImageInfo& detail);
     // Records the amortized heightfield sweep before a render pass samples the
     // mask.  It dispatches only after a map revision, shadow setting change, or
     // a sun movement greater than ~0.25 degrees.
@@ -200,11 +194,12 @@ class TerrainVK
     VkSampler _indexSampler = VK_NULL_HANDLE;
     VkSampler _jitterSampler = VK_NULL_HANDLE;
     VkSampler _maskSampler = VK_NULL_HANDLE;
+    VkSampler _layerRepeatSampler = VK_NULL_HANDLE;
+    VkSampler _layerClampSampler = VK_NULL_HANDLE;
     VkDescriptorSetLayout _visualDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool _visualDescriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet _visualDescriptorSet = VK_NULL_HANDLE;
     VkDescriptorImageInfo _detailDescriptor = {};
-    VkDescriptorImageInfo _blendDescriptor = {};
     VkDescriptorSetLayout _shadowComputeDescriptorSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool _shadowComputeDescriptorPool = VK_NULL_HANDLE;
     VkDescriptorSet _shadowComputeDescriptorSet = VK_NULL_HANDLE;
@@ -233,7 +228,7 @@ class TerrainVK
     VkImageLayout _selfShadowLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     float _lastSunToLight[3] = {};
     bool _shadowDirty = true;
-    bool _detailBlendDescriptorsReady = false;
+    bool _detailDescriptorsReady = false;
     bool _selfShadowPopulated = false;
     bool _visualDescriptorsReady = false;
     bool _ready = false;

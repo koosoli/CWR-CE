@@ -93,8 +93,12 @@ void main()
     gl_Position = frame.projection * frame.view * vec4(worldPos, 1.0);
     vWorldPos = worldPos;
     vWorldNormal = normal;
+    // Keep this coordinate continuous into the fragment stage. The material
+    // shader derives its local tile coordinate after interpolation so a
+    // triangle crossing a land-cell border cannot interpolate two fractional
+    // coordinates through the wrong side of the tile.
     vec2 land = (worldXZ - terrain.worldOrigin) / terrain.landGrid;
-    vLandUv = fract(land);
+    vLandUv = land;
     vLandCell = uvec2(clamp(floor(land), vec2(0.0), vec2(terrain.dimensions.z - 1u)));
     vLod = inLod;
 }

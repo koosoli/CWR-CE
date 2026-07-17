@@ -191,6 +191,13 @@ elseif(DIST_PRESET_NAME MATCHES "^steamrt4-([^-]+)-clang(-(.*))?$")
 endif()
 set(DIST_DIR "${CMAKE_SOURCE_DIR}/dist/${DIST_PRESET_NAME}")
 
+# vcpkg's freetype target names ZLIB, BZip2, and PNG imported targets in its
+# link interface but does not import them itself. Create them at root scope so
+# every subdirectory that requests freetype resolves the same complete target.
+find_package(ZLIB REQUIRED)
+find_package(BZip2 REQUIRED)
+find_package(PNG REQUIRED)
+
 add_subdirectory(engine/Poseidon)
 add_subdirectory(engine/PoseidonGL33)
 add_subdirectory(engine/PoseidonVK)

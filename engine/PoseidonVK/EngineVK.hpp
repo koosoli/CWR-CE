@@ -257,6 +257,11 @@ class EngineVK : public EngineDummy
     bool CreateTextureDescriptorPool();
     void DestroyTextureDescriptorResources();
     bool UpdateTerrainLayerDescriptors(const render::frame::TerrainOpaque& terrain);
+    // Resolves the real authored detail source. The explicitly enabled
+    // TerrainVK preview may bind the deterministic neutral fallback only when
+    // detail is absent; it never relaxes a terrain layer image requirement.
+    bool UpdateTerrainVisualDescriptors();
+    bool CreateTerrainRasterPipeline();
 
     SDL_Window* _window = nullptr;
     VkInstance _instance = VK_NULL_HANDLE;
@@ -416,6 +421,12 @@ class EngineVK : public EngineDummy
     // Reset at InitDraw and retained through SceneExtractor/BuildFrame so the
     // immutable terrain snapshot cannot leak into a later frame.
     std::optional<render::frame::TerrainOpaque> _capturedTerrainOpaque;
+    bool _terrainOpaqueInSubmittedFrame = false;
+    // Opt-in preview only: POSEIDON_VK_TERRAIN_EXPERIMENT must equal "1".
+    // Default rendering remains legacy segments when authored terrain visual
+    // inputs are unavailable.
+    bool _terrainPreviewExperiment = false;
+    std::string _terrainVisualInputReason = "terrain visual sources not evaluated";
     bool _debugUtilsEnabled = false;
     bool _proceduralSkyEnabled = false;
     bool _skyMapDirty = true;
@@ -456,7 +467,7 @@ class EngineVK : public EngineDummy
     std::array<float, 40> _skyMapRequestedInputs = {};
     std::vector<vk::DrawConstantsVK> _lastDrawConstants;
     std::vector<vk::SceneDrawCommandVK> _lastSceneDrawCommands;
-    std::array<std::vector<std::uint32_t>, 6> _sceneCommandGroups;
+    std::array<std::vector<std::uint32_t>, 7> _sceneCommandGroups;
     std::vector<vk::GpuSceneInstanceVK> _gpuSceneInstances;
     std::vector<vk::GpuSceneBatchVK> _gpuSceneBatches;
     vk::MeshRegistryVK _meshRegistry;

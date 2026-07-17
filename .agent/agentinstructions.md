@@ -59,7 +59,7 @@ Do not let large amounts of uncompiled code pile up. Suggest or run a build
 after changing CMake targets, moving headers, externalizing shaders, changing
 shared render contracts, or touching backend lifecycle code.
 
-For local manual smoke tests in this workspace, always compile `PoseidonGameDemo.exe` at the directory `C:\Users\mail\OneDrive\Documents\GitHub\CWR-CE\build\codex-vk-dbg\apps\cwr\GameDemo` so that the user can manually smoke test. Do not build the full `PoseidonGame` executable unless the user explicitly asks for it.
+For local manual smoke tests in this workspace, always build and deploy `PoseidonGameDemo.exe` directly to `D:\SteamLibrary\steamapps\common\Arma Cold War Assault Demo`. Run the deployed executable from that directory against its installed Demo data. Do not hand the user a temporary build-path command or require them to build an executable themselves. Do not build the full `PoseidonGame` executable unless the user explicitly asks for it.
 
 When a functional milestone is reached, ask for or perform a manual smoke test
 with the real executable and original game assets only when it adds useful

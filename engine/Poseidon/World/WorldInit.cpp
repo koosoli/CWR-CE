@@ -169,13 +169,40 @@ class MissionAssetLease
 
 void AcquireMissionAssets(MissionAssetLease& assets, const ArcadeTemplate& templateInfo)
 {
-    const auto acquireUnit = [&assets](const ArcadeUnitInfo& unit)
+    const auto canPreloadVehicleType = [](RString name)
     {
-        assets.Acquire(unit.type ? static_cast<EntityType*>(unit.type) : VehicleTypes.New(unit.vehicle));
+        if (name.GetLength() == 0 || !(Pars >> "CfgVehicles").FindEntry(name))
+            return false;
+
+        const ParamEntry& cfg = Pars >> "CfgVehicles" >> name;
+        if ((cfg >> "scope").GetInt() <= 0)
+            return true;
+
+        RString simulation = cfg >> "simulation";
+        simulation.Lower();
+        const char* simulationName = simulation;
+        return !strcmp(simulationName, "tank") || !strcmp(simulationName, "zsu") ||
+               !strcmp(simulationName, "car") || !strcmp(simulationName, "motorcycle") ||
+               !strcmp(simulationName, "ship") || !strcmp(simulationName, "soldierold") ||
+               !strcmp(simulationName, "soldier") || !strcmp(simulationName, "helicopter") ||
+               !strcmp(simulationName, "parachute") || !strcmp(simulationName, "airplane") ||
+               !strcmp(simulationName, "lasertarget") || !strcmp(simulationName, "house") ||
+               !strcmp(simulationName, "thing") || !strcmp(simulationName, "thingeffect") ||
+               !strcmp(simulationName, "church") || !strcmp(simulationName, "fire") ||
+               !strcmp(simulationName, "forest") || !strcmp(simulationName, "seagull") ||
+               !strcmp(simulationName, "camera") || !strcmp(simulationName, "flagcarrier") ||
+               !strcmp(simulationName, "fountain") || !strcmp(simulationName, "invisible");
     };
-    const auto acquireSensor = [&assets](const ArcadeSensorInfo& sensor)
+    const auto acquireUnit = [&assets, &canPreloadVehicleType](const ArcadeUnitInfo& unit)
     {
-        if (sensor.object.GetLength() > 0)
+        if (unit.type)
+            assets.Acquire(static_cast<EntityType*>(unit.type));
+        else if (canPreloadVehicleType(unit.vehicle))
+            assets.Acquire(VehicleTypes.New(unit.vehicle));
+    };
+    const auto acquireSensor = [&assets, &canPreloadVehicleType](const ArcadeSensorInfo& sensor)
+    {
+        if (canPreloadVehicleType(sensor.object))
             assets.Acquire(VehicleTypes.New(sensor.object));
     };
 

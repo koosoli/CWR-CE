@@ -40,7 +40,7 @@ layout(set = 0, binding = 0, std140) uniform FrameConstants
 } frame;
 layout(set = 0, binding = 2) uniform sampler2DArrayShadow shadowMap;
 
-// TerrainVK descriptor set.  Index high bit is the captured ClampU|ClampV
+// TerrainVK descriptor set. Index high bit is the captured ClampU|ClampV
 // transition bit; the lower 15 bits are the native TextureVK layer index.
 layout(set = 1, binding = 0) uniform sampler2D heightmap;
 layout(set = 1, binding = 1) uniform usampler2D indexMap;
@@ -54,15 +54,19 @@ layout(set = 1, binding = 3, std140) uniform TerrainParams
     vec4 water;
     vec4 wetness;
 } terrain;
-layout(set = 1, binding = 4) uniform sampler2D terrainLayers[];
+// WGPU's material contract owns these two samplers at terrain scope. Layer
+// descriptors are sampled images, rather than TextureVK combined samplers:
+// bit 15 chooses repeat or clamp without changing the underlying layer image.
+layout(set = 1, binding = 4) uniform sampler terrainRepeatSampler;
+layout(set = 1, binding = 5) uniform sampler terrainClampSampler;
+layout(set = 1, binding = 6) uniform texture2D terrainLayers[];
 
-// Required visual receiver set.  No fallback is legal for these resources:
-// terrain self-shadow, detail/blend control and sky visibility are distinct
-// from CSM and must be supplied together by the future terrain pass.
+// Required visual receiver set. No fallback is legal for these resources:
+// terrain self-shadow, detail, and sky visibility are distinct from CSM and
+// must be supplied together by the terrain pass.
 layout(set = 2, binding = 0) uniform sampler2D terrainSelfShadow;
 layout(set = 2, binding = 1) uniform sampler2D terrainDetail;
-layout(set = 2, binding = 2) uniform sampler2D terrainBlend;
-layout(set = 2, binding = 3) uniform sampler2D terrainSkyVisibility;
+layout(set = 2, binding = 2) uniform sampler2D terrainSkyVisibility;
 
 const uint kTransitionBit = 0x8000u;
 const uint kLayerMask = 0x7fffu;
@@ -77,13 +81,25 @@ float HeightAt(vec2 worldXZ)
     return texture(heightmap, clamp(uv, vec2(0.0), vec2(1.0))).r;
 }
 
-vec4 SampleNativeLayer(uint layer, vec2 uv, bool transition)
+uint LandEntry(ivec2 landCell)
 {
-    // TextureVK descriptors retain native sampler state.  The captured
-    // transition bit carries legacy ClampU|ClampV behavior at the terrain-cell
-    // seam; ordinary layers retain repeated local coordinates.
-    vec2 layerUv = transition ? clamp(uv, vec2(0.0), vec2(1.0)) : fract(uv);
-    return texture(terrainLayers[nonuniformEXT(layer)], layerUv);
+    ivec2 extent = ivec2(terrain.dimensions.z);
+    return texelFetch(indexMap, clamp(landCell, ivec2(0), extent - ivec2(1)), 0).r;
+}
+
+vec4 SampleNativeLayer(uint entry, vec2 tileUv, vec2 tileUvDx, vec2 tileUvDy)
+{
+    const uint layer = entry & kLayerMask;
+    // CPU validation guarantees layer < layerCount. The explicit upper bound
+    // still makes a damaged map unable to index an undefined descriptor.
+    if (layer >= terrain.dimensions.w)
+        return vec4(0.0);
+    const bool transition = (entry & kTransitionBit) != 0u;
+    sampler2D sampledLayer = sampler(terrainLayers[nonuniformEXT(layer)],
+                                     transition ? terrainClampSampler : terrainRepeatSampler);
+    // Explicit gradients retain the WGPU material's mip choice across a
+    // fract(tileUv) seam and across the four dynamic layer selections.
+    return textureGrad(sampledLayer, tileUv, tileUvDx, tileUvDy);
 }
 
 float CascadeShadow(vec3 worldPosition)
@@ -131,21 +147,36 @@ vec3 TerrainLighting(vec3 normal, float directVisibility, float skyVisibility)
 
 void main()
 {
-    uint entry = texelFetch(indexMap, ivec2(vLandCell), 0).r;
-    uint layer = entry & kLayerMask;
-    if (layer >= terrain.dimensions.w)
-        discard; // CPU validation makes this unreachable; never index undefined descriptors.
-    bool transition = (entry & kTransitionBit) != 0u;
-    vec2 jitter = texelFetch(jitterMap, ivec2(vLandCell), 0).rg * (1.0 / 10.0);
-    vec2 layerUv = vLandUv + jitter;
-    vec4 albedo = SampleNativeLayer(layer, layerUv, transition);
+    // The four neighboring land cells are blended continuously. Keep tileUv
+    // local for the clamp-transition layer, but derive gradients from the
+    // continuous coordinate so a cell edge neither aliases nor forces mip 0.
+    vec2 landUv = vLandUv;
+    vec2 tileUv = fract(landUv);
+    ivec2 landCell = ivec2(floor(landUv));
+    vec2 weights = tileUv;
+    vec2 tileUvDx = dFdx(landUv);
+    vec2 tileUvDy = dFdy(landUv);
 
-    // Detail and blend are separate visual resources, not guessed from layer
-    // IDs. The blend map's alpha weights the doubled-detail legacy modulation.
-    vec2 detailUv = vWorldPos.xz * (1.0 / max(terrain.landGrid, 0.001));
-    vec4 detail = texture(terrainDetail, detailUv + jitter);
-    vec4 blend = texture(terrainBlend, detailUv);
-    albedo.rgb *= mix(vec3(1.0), clamp(detail.rgb * 2.0, vec3(0.0), vec3(2.0)), blend.a);
+    // The R8G8_SNORM map contains the already captured random offsets. Sample
+    // it linearly in continuous land space; applying another 0.1 scale here
+    // would attenuate the reference jitter a second time.
+    vec2 jitterMapUv = (landUv + vec2(0.5)) / max(vec2(terrain.dimensions.z), vec2(1.0));
+    vec2 jitter = texture(jitterMap, clamp(jitterMapUv, vec2(0.0), vec2(1.0))).rg;
+    vec2 materialUv = tileUv + jitter;
+
+    vec4 lower = mix(SampleNativeLayer(LandEntry(landCell), materialUv, tileUvDx, tileUvDy),
+                     SampleNativeLayer(LandEntry(landCell + ivec2(1, 0)), materialUv, tileUvDx, tileUvDy),
+                     weights.x);
+    vec4 upper = mix(SampleNativeLayer(LandEntry(landCell + ivec2(0, 1)), materialUv, tileUvDx, tileUvDy),
+                     SampleNativeLayer(LandEntry(landCell + ivec2(1, 1)), materialUv, tileUvDx, tileUvDy),
+                     weights.x);
+    vec4 albedo = mix(lower, upper, weights.y);
+
+    // The detail texture's own alpha is the modulation weight.
+    const float kDetailTileScale = 32.0 * 2.0;
+    vec4 detail = textureGrad(terrainDetail, tileUv * kDetailTileScale,
+                              tileUvDx * kDetailTileScale, tileUvDy * kDetailTileScale);
+    albedo.rgb *= mix(vec3(1.0), clamp(detail.rgb * 2.0, vec3(0.0), vec3(2.0)), detail.a);
 
     // The self-shadow resource is world-aligned and deliberately has an
     // extended (normally 2x) grid.  It stores a ceiling rather than a baked

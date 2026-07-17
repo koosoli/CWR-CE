@@ -98,6 +98,7 @@ enum class SceneGroup : std::uint32_t
     Opaque,
     Cutout,
     Other,
+    Transparent,
     WorldLate,
     Present,
 };
@@ -493,6 +494,12 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
         _temporalExposureEnabled = std::strcmp(value, "0") != 0;
     if (const char* value = std::getenv("POSEIDON_VK_CSM"))
         _shadowTuning.enabled = std::strcmp(value, "0") != 0;
+    // This is deliberately an exact opt-in rather than the usual non-zero
+    // environment convention. It permits only the detail preview
+    // fallback below; all map, layer, CSM, and derived-receiver validation
+    // remains mandatory.
+    if (const char* value = std::getenv("POSEIDON_VK_TERRAIN_EXPERIMENT"))
+        _terrainPreviewExperiment = std::strcmp(value, "1") == 0;
 
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
@@ -630,15 +637,26 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
              _height, static_cast<int>(_windowMode), _graphicsQueueFamily, _presentQueueFamily);
     LOG_WARN(Graphics, "Vulkan: scene raster parity is in progress; water and some legacy clipped geometry may differ "
                         "from the GL33 renderer.");
+    if (_terrainPreviewExperiment)
+    {
+        LOG_WARN(Graphics,
+                  "Vulkan terrain telemetry: WARN label=TerrainVK-experimental-preview visual-parity=incomplete "
+                  "missing-inputs=authored-detail-descriptor "
+                  "fallback=deterministic-neutral-detail-only");
+    }
     // Resource-only capture keeps the immutable map and its derived masks warm
-    // under the legacy receiver. It intentionally does not install a dedicated
-    // terrain raster pass until real detail/blend inputs are also bound.
+    // under the legacy receiver. The dedicated path is installed only after the
+    // authored detail source has completed upload and all descriptors
+    // can be validated against the current render pass.
     if (WantsDedicatedTerrainOpaque())
-        LOG_INFO(Graphics, "Vulkan terrain telemetry: mode=dedicated raster=enabled descriptor-indexing=true "
-                           "params-buffer={}", _terrainVk.ParamsBuffer().buffer != VK_NULL_HANDLE);
+        LOG_INFO(Graphics, "Vulkan terrain telemetry: mode=dedicated-cdlod nodes={} batches={} legacyDraws=0 "
+                           "descriptor-indexing=true params-buffer={}",
+                 _terrainVk.VisibleNodes().size(), _terrainVk.VisibleNodes().empty() ? 0u : 1u,
+                 _terrainVk.ParamsBuffer().buffer != VK_NULL_HANDLE);
     else if (WantsTerrainOpaqueCapture())
-        LOG_INFO(Graphics, "Vulkan terrain telemetry: mode=legacy-segments terrain-resources=staged "
-                           "descriptor-indexing=true");
+        LOG_INFO(Graphics, "Vulkan terrain telemetry: mode=legacy-segments nodes={} batches=0 legacyDraws=unknown "
+                           "terrain-resources=staged descriptor-indexing=true reason={}",
+                 _terrainVk.VisibleNodes().size(), _terrainVisualInputReason);
     else
         LOG_WARN(Graphics, "Vulkan terrain telemetry: mode=legacy-segments reason={}",
                  _terrainDescriptorIndexingSupported ? "TerrainVK-not-ready" : "descriptor-indexing-unsupported");
@@ -711,6 +729,7 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
     // from the immutable plan. Raster submission remains gated off until the
     // descriptor-array material set and terrain shadow/sky-visibility passes
     // are attached; this must not silently replace the legacy receiver early.
+    _terrainOpaqueInSubmittedFrame = frame.terrainOpaque.has_value();
     const render::frame::TerrainOpaque* terrainInput = frame.terrainOpaque ? &*frame.terrainOpaque
                                                                              : (_capturedTerrainOpaque ? &*_capturedTerrainOpaque
                                                                                                        : nullptr);
@@ -721,6 +740,11 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
             const auto& terrain = *terrainInput;
             if (UpdateTerrainLayerDescriptors(terrain))
             {
+                // Detail is a dedicated terrain input, independent of the
+                // native material layer array. A source that is still uploading
+                // is not legal for CDLOD yet; legacy segments retain ownership
+                // until its authored image is shader-readable.
+                UpdateTerrainVisualDescriptors();
                 _terrainVk.Select(frame.cameraPosition[0], frame.cameraPosition[1], frame.cameraPosition[2],
                                   terrain.visibleXBegin * terrain.landGrid, terrain.visibleZBegin * terrain.landGrid,
                                   terrain.visibleXEnd * terrain.landGrid, terrain.visibleZEnd * terrain.landGrid);
@@ -779,9 +803,13 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
                 case render::PassKind::SurfaceOverlay:
                 case render::PassKind::WorldWater:
                 case render::PassKind::WorldShadow:
-                case render::PassKind::WorldTransparent:
                 case render::PassKind::WorldLight:
                     group = SceneGroup::Other;
+                    break;
+                case render::PassKind::WorldTransparent:
+                    // Preserve the scene's back-to-front order. Batching these
+                    // with opaque overlays reorders partial-alpha house sections.
+                    group = SceneGroup::Transparent;
                     break;
                 case render::PassKind::CockpitOpaque:
                 case render::PassKind::CockpitCutout:
@@ -821,19 +849,37 @@ void EngineVK::SubmitFramePlan(const render::frame::Frame& frame)
                        _shadowCascadeDrawCounts[0], _shadowCascadeDrawCounts[1], _shadowCascadeDrawCounts[2],
                         _shadowCascadeDrawCounts[3], _shadowResolvedDrawCount);
             const vk::TerrainVK::DescriptorTelemetry& terrainTelemetry = _terrainVk.Telemetry();
+            const std::size_t legacyTerrainDraws =
+                _sceneCommandGroups[static_cast<std::uint32_t>(SceneGroup::Terrain)].size();
+            const bool dedicatedTerrain = _terrainOpaqueInSubmittedFrame && WantsDedicatedTerrainOpaque();
             LOG_INFO(Graphics,
-                      "Vulkan terrain telemetry: mode={} resources={} nodes={} revision={} static-ready={} visual-ready={} captured={} layers={}/{} capacity={} fallback={} invalid={} invalid-indices={}",
-                       WantsDedicatedTerrainOpaque() ? "dedicated" : "legacy-segments",
-                       WantsTerrainOpaqueCapture() ? "staged" : "off",
-                       _terrainVk.VisibleNodes().size(), _terrainVk.Revision(), _terrainVk.Ready(),
-                       _terrainVk.VisualInputsReady(), frame.terrainOpaque.has_value() || _capturedTerrainOpaque.has_value(),
-                       terrainTelemetry.boundLayers, terrainTelemetry.requestedLayers,
+                       "Vulkan terrain telemetry: mode={} nodes={} batches={} legacyDraws={} resources={} revision={} static-ready={} visual-ready={} captured={} visual-reason={} layers={}/{} capacity={} fallback={} invalid={} invalid-indices={}",
+                        dedicatedTerrain ? "dedicated-cdlod" : "legacy-segments", _terrainVk.VisibleNodes().size(),
+                        dedicatedTerrain && !_terrainVk.VisibleNodes().empty() ? 1u : 0u,
+                        dedicatedTerrain ? 0u : static_cast<unsigned>(legacyTerrainDraws),
+                        WantsTerrainOpaqueCapture() ? "staged" : "off",
+                        _terrainVk.Revision(), _terrainVk.Ready(),
+                        _terrainVk.VisualInputsReady(), frame.terrainOpaque.has_value() || _capturedTerrainOpaque.has_value(),
+                        _terrainVisualInputReason,
+                        terrainTelemetry.boundLayers, terrainTelemetry.requestedLayers,
                       terrainTelemetry.capacity, terrainTelemetry.fallbackLayers, terrainTelemetry.invalidLayers,
                       terrainTelemetry.invalidLayerIndices);
             LOG_INFO(Graphics,
                      "Vulkan CPU ms: submit={:.2f} gpu-scene-input={:.2f} shadow-record={:.2f} shadow-prepare={:.2f} shadow-secondary={:.2f} command-record={:.2f} fence-wait={:.2f}",
                      _cpuSubmitFramePlanMs, _cpuGpuSceneInputMs, _cpuShadowRecordMs, _cpuShadowPrepareMs,
                      _cpuShadowSecondaryRecordMs, _cpuCommandRecordMs, _cpuFrameFenceWaitMs);
+            std::array<std::uint32_t, 4> transparentDepthCounts = {};
+            for (const std::uint32_t commandIndex : _sceneCommandGroups[static_cast<std::uint32_t>(SceneGroup::Transparent)])
+            {
+                const auto depth = static_cast<render::DepthMode>(
+                    _lastDrawConstants[_lastSceneDrawCommands[commandIndex].drawIndex].depth);
+                ++transparentDepthCounts[static_cast<std::uint32_t>(depth)];
+            }
+            LOG_INFO(Graphics, "Vulkan transparent depth: normal={} readonly={} disabled={} shadow={}",
+                     transparentDepthCounts[static_cast<std::uint32_t>(render::DepthMode::Normal)],
+                     transparentDepthCounts[static_cast<std::uint32_t>(render::DepthMode::ReadOnly)],
+                     transparentDepthCounts[static_cast<std::uint32_t>(render::DepthMode::Disabled)],
+                     transparentDepthCounts[static_cast<std::uint32_t>(render::DepthMode::Shadow)]);
         }
     }
 
@@ -1495,8 +1541,9 @@ void EngineVK::BuildGpuSceneInputs()
 
     for (std::uint32_t groupIndex = 0; groupIndex < _sceneCommandGroups.size(); ++groupIndex)
     {
-        const bool orderSensitive = groupIndex == static_cast<std::uint32_t>(SceneGroup::WorldLate) ||
-                                    groupIndex == static_cast<std::uint32_t>(SceneGroup::Present);
+        const bool orderSensitive = groupIndex == static_cast<std::uint32_t>(SceneGroup::Transparent) ||
+                                     groupIndex == static_cast<std::uint32_t>(SceneGroup::WorldLate) ||
+                                     groupIndex == static_cast<std::uint32_t>(SceneGroup::Present);
         const auto& commands = _sceneCommandGroups[groupIndex];
         std::vector<std::uint32_t> stateSortedCommands;
         bool canReorder = groupIndex == static_cast<std::uint32_t>(SceneGroup::Opaque) ||
@@ -5303,6 +5350,10 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
     {
         const float* sunTravel = _lastFrameConstants.sunDirection;
         _terrainVk.RecordSelfShadowPass(commandBuffer, -sunTravel[0], -sunTravel[1], -sunTravel[2]);
+        // The graphics pipeline is constructed only after binding 0's compute
+        // write has been transitioned to shader-read layout.
+        if (_terrainVk.VisualInputsReady())
+            CreateTerrainRasterPipeline();
     }
 
     // Compute writes compact VkDrawIndexedIndirectCommand streams before the
@@ -5702,7 +5753,26 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
             vkCmdDrawIndexed(commandBuffer, kSceneQuadIndexCount, 1, 0, 0, 0);
         }
     };
-    recordSceneDraws(SceneGroup::Terrain);
+    const bool recordDedicatedTerrain = _terrainOpaqueInSubmittedFrame && WantsDedicatedTerrainOpaque();
+    if (recordDedicatedTerrain)
+    {
+        VkDescriptorSet terrainSets[] = {_frameDescriptorSet, _terrainVk.DescriptorSet(), _terrainVk.VisualDescriptorSet()};
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _terrainVk.RasterPipeline());
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _terrainVk.RasterPipelineLayout(), 0, 3,
+                                terrainSets, 0, nullptr);
+        if (!_terrainVk.RecordInstancedGridDraw(commandBuffer))
+        {
+            // Do not substitute a placeholder draw. Invalidate the pipeline so
+            // the next source collection keeps legacy segments authoritative.
+            LOG_WARN(Graphics, "Vulkan terrain telemetry: dedicated CDLOD draw rejected; reverting to legacy segments");
+            _terrainVk.DestroyRasterPipeline(_device);
+            _terrainVisualInputReason = "dedicated grid draw rejected";
+        }
+    }
+    else
+    {
+        recordSceneDraws(SceneGroup::Terrain);
+    }
     if (WorldCompositionActive())
     {
         if (_gpuTimingQueryPool)
@@ -5716,6 +5786,7 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         recordSceneDraws(SceneGroup::Other);
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 4);
+        recordSceneDraws(SceneGroup::Transparent);
         vkCmdEndRenderPass(commandBuffer);
         if (_gpuTimingQueryPool)
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, _gpuTimingQueryPool, 5);
@@ -5854,6 +5925,9 @@ void EngineVK::DestroySwapchain()
     _scenePipelineCache.Destroy(_device);
     _cockpitScenePipelineCache.Destroy(_device);
     _worldLateScenePipelineCache.Destroy(_device);
+    // This pipeline bakes the active render pass and viewport. Maps and their
+    // descriptor sets survive resize, but the graphics pipeline must not.
+    _terrainVk.DestroyRasterPipeline(_device);
 
     if (_proceduralSkyPipeline)
     {
@@ -6467,7 +6541,11 @@ bool EngineVK::WantsDedicatedTerrainOpaque() const
     // terrain disappear rather than render with incomplete CSM/self-shadow and
     // visual-input bindings. CreateRasterPipeline() itself refuses to create
     // the pipeline until those inputs are declared complete.
-    return _terrainDescriptorIndexingSupported && _terrainVk.Ready() && _terrainVk.RasterPipelineReady();
+    const vk::TerrainVK::DescriptorTelemetry& layers = _terrainVk.Telemetry();
+    return _terrainDescriptorIndexingSupported && _terrainVk.Ready() && _terrainVk.VisualInputsReady() &&
+           _terrainVk.RasterPipelineReady() && !_terrainVk.VisibleNodes().empty() && layers.requestedLayers != 0 &&
+           layers.boundLayers == layers.requestedLayers && layers.fallbackLayers == 0 && layers.invalidLayers == 0 &&
+           layers.invalidLayerIndices == 0;
 }
 
 bool EngineVK::WantsTerrainOpaqueCapture() const
@@ -6486,6 +6564,26 @@ bool EngineVK::CaptureDedicatedTerrainOpaque(const render::frame::TerrainOpaque&
     // TerrainOpaque is the frame-owned value contract. Copy it before the
     // landscape's working vectors can be reused by the next draw operation.
     _capturedTerrainOpaque = terrain;
+    // Capture occurs after InitDraw has waited the previous submission fence,
+    // so descriptor replacement is safe here.  Re-resolve the snapshot's
+    // layers before returning the ownership hand-off: no queued upload may
+    // turn into a white/neutral terrain layer on a dedicated frame.
+    if (_terrainVk.RasterPipelineReady() && !UpdateTerrainLayerDescriptors(terrain))
+    {
+        _terrainVk.DestroyRasterPipeline(_device);
+        _terrainVisualInputReason = "terrain layer descriptor population failed during dedicated capture";
+        return false;
+    }
+    const vk::TerrainVK::DescriptorTelemetry& layers = _terrainVk.Telemetry();
+    if (_terrainVk.RasterPipelineReady() &&
+        (layers.requestedLayers != terrain.textureLayers.size() || layers.boundLayers != terrain.textureLayers.size() ||
+         layers.fallbackLayers != 0 || layers.invalidLayers != 0 ||
+         layers.invalidLayerIndices != 0))
+    {
+        _terrainVk.DestroyRasterPipeline(_device);
+        _terrainVisualInputReason = "terrain layer source is pending, missing, or invalid; dedicated CDLOD requires native images";
+        return false;
+    }
     return true;
 }
 
@@ -6741,16 +6839,6 @@ TextureVK* EngineVK::ResolveTexture(std::uint32_t id) const
 
 bool EngineVK::UpdateTerrainLayerDescriptors(const render::frame::TerrainOpaque& terrain)
 {
-    if (!_fallbackWhiteTexture)
-        return false;
-
-    VkDescriptorImageInfo fallbackImage{};
-    // The fallback's upload may be queued on the first frame. Its descriptor
-    // payload is still valid and RecordPendingTextureUploads places that
-    // transition before any future terrain draw on this queue.
-    if (!_fallbackWhiteTexture->GetSampledImageInfo(fallbackImage))
-        return false;
-
     std::vector<vk::TerrainVK::LayerBinding> layers;
     layers.reserve(terrain.textureLayers.size());
     for (const render::frame::TextureHandle handle : terrain.textureLayers)
@@ -6766,16 +6854,146 @@ bool EngineVK::UpdateTerrainLayerDescriptors(const render::frame::TerrainOpaque&
         }
         else
         {
-            layer.image = fallbackImage;
-            layer.usesFallback = true;
-            // A captured id which no longer resolves, or whose native image
-            // has become unusable, is invalid. A live upload is valid but is
-            // deterministically represented by fallback until it is ready.
-            layer.sourceValid = source != nullptr && source->GetSampledImageInfo(sourceImage);
+            // A terrain layer never receives a stand-in descriptor. The
+            // renderer waits for its actual TextureVK image, preserving the
+            // sampled-image array's material identity and mip chain.
+            _terrainVisualInputReason = "terrain layer image is absent or not ready; no terrain fallback is permitted";
+            return false;
         }
         layers.push_back(layer);
     }
     return _terrainVk.UpdateLayerDescriptors(layers);
+}
+
+bool EngineVK::UpdateTerrainVisualDescriptors()
+{
+    if (!_terrainVk.Ready())
+    {
+        _terrainVisualInputReason = "TerrainVK is not initialized";
+        return false;
+    }
+
+    // This source intentionally bypasses the normal material fallback policy.
+    // The experimental gate below is the sole exception: it can supply a
+    // deterministic descriptor for absent detail, never for material layers,
+    // immutable maps, CSM, self-shadow, or sky visibility.
+    const auto resolveAuthored = [&](TextureVK* texture, const char* sourceName, VkDescriptorImageInfo& image,
+                                     std::string& reason)
+    {
+        if (!texture)
+        {
+            reason = std::string("CfgDetailTextures.") + sourceName + " is not configured or its asset is unavailable";
+            return false;
+        }
+        if (texture == _fallbackWhiteTexture.GetRef())
+        {
+            reason = std::string("CfgDetailTextures.") + sourceName + " resolved to the forbidden fallback texture";
+            return false;
+        }
+        if (!texture->HasValidGpuImage() || !texture->IsGpuReadyForSampling())
+        {
+            reason = std::string("CfgDetailTextures.") + sourceName + " upload has not completed";
+            return false;
+        }
+        if (!texture->GetSampledImageInfo(image) || image.imageView == VK_NULL_HANDLE || image.sampler == VK_NULL_HANDLE ||
+            image.imageLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            reason = std::string("CfgDetailTextures.") + sourceName + " has no shader-readable Vulkan image";
+            return false;
+        }
+        return true;
+    };
+
+    TextureVK* detail = _textBank ? _textBank->GetDetailTexture() : nullptr;
+    VkDescriptorImageInfo detailImage{};
+    std::string detailReason;
+    const bool detailReady = resolveAuthored(detail, "detail", detailImage, detailReason);
+    if (!detailReady)
+    {
+        if (!_terrainPreviewExperiment || !_fallbackWhiteTexture)
+        {
+            _terrainVisualInputReason = detailReason;
+            _terrainVk.DestroyRasterPipeline(_device);
+            return false;
+        }
+
+        // The 1x1 RGBA(128,128,128,255) fallback is deterministic.  With the
+        // terrain shader's doubled-detail modulation it is a stable neutral
+        // approximation for an absent detail descriptor. Its queued upload is
+        // recorded before the render pass on this same queue.
+        VkDescriptorImageInfo previewFallback{};
+        if (!_fallbackWhiteTexture->GetSampledImageInfo(previewFallback) ||
+            previewFallback.imageView == VK_NULL_HANDLE || previewFallback.sampler == VK_NULL_HANDLE ||
+            previewFallback.imageLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
+            _terrainVisualInputReason = "experimental preview fallback descriptor is unavailable";
+            _terrainVk.DestroyRasterPipeline(_device);
+            return false;
+        }
+        detailImage = previewFallback;
+        _terrainVisualInputReason = "EXPERIMENTAL visual parity incomplete; missing " + detailReason +
+                                    "; deterministic fallback bound only for absent detail descriptor";
+    }
+    if (!_terrainVk.UpdateVisualDescriptors(detailImage))
+    {
+        _terrainVisualInputReason = "TerrainVK rejected detail descriptor population";
+        _terrainVk.DestroyRasterPipeline(_device);
+        return false;
+    }
+    if (detailReady)
+        _terrainVisualInputReason = "authored detail descriptor populated";
+    return true;
+}
+
+bool EngineVK::CreateTerrainRasterPipeline()
+{
+    if (_terrainVk.RasterPipelineReady())
+        return true;
+    if (!_terrainVk.VisualInputsReady())
+    {
+        _terrainVisualInputReason = "self-shadow/sky-visibility or authored detail descriptor is not populated";
+        return false;
+    }
+    const vk::TerrainVK::DescriptorTelemetry& layers = _terrainVk.Telemetry();
+    if (layers.requestedLayers == 0 || layers.boundLayers != layers.requestedLayers || layers.fallbackLayers != 0 ||
+        layers.invalidLayers != 0 || layers.invalidLayerIndices != 0)
+    {
+        _terrainVisualInputReason = "terrain layer array has pending/fallback/invalid entries";
+        return false;
+    }
+
+    vk::TerrainVK::RasterInputs inputs;
+    inputs.frameDescriptorSetLayout = _frameDescriptorSetLayout;
+    inputs.visualDescriptorSetLayout = _terrainVk.VisualDescriptorSetLayout();
+    inputs.frameDescriptorSet = _frameDescriptorSet;
+    inputs.visualDescriptorSet = _terrainVk.VisualDescriptorSet();
+    inputs.renderPass = _renderPass;
+    inputs.extent = _swapchainExtent;
+    inputs.csmBound = _shadowDepthImage.view != VK_NULL_HANDLE && _shadowSampler != VK_NULL_HANDLE;
+    inputs.selfShadowBound = true;
+    inputs.detailBound = true;
+    inputs.skyVisibilityBound = true;
+    if (!_terrainVk.CreateRasterPipeline(inputs))
+    {
+        _terrainVisualInputReason = "terrain shader/pipeline bindings are incompatible with the active render pass";
+        return false;
+    }
+    const bool experimentalFallback =
+        _terrainPreviewExperiment && _terrainVisualInputReason.rfind("EXPERIMENTAL visual parity incomplete", 0) == 0;
+    if (experimentalFallback)
+    {
+        LOG_WARN(Graphics,
+                  "Vulkan terrain telemetry: WARN label=TerrainVK-experimental-preview visual-parity=incomplete "
+                  "activation=validated-detail-fallback reason={}",
+                 _terrainVisualInputReason);
+    }
+    else
+    {
+        _terrainVisualInputReason = "dedicated CDLOD pipeline and all visual descriptors validated";
+        LOG_INFO(Graphics, "Vulkan terrain telemetry: mode=dedicated-cdlod nodes={} batches={} legacyDraws=0 activation=validated",
+                 _terrainVk.VisibleNodes().size(), _terrainVk.VisibleNodes().empty() ? 0u : 1u);
+    }
+    return true;
 }
 
 void EngineVK::InitDraw(bool clear, PackedColor color)
@@ -6787,6 +7005,11 @@ void EngineVK::InitDraw(bool clear, PackedColor color)
     Engine::InitDraw(clear, color);
     if (_textBank)
         _textBank->StartFrame();
+    // Source validation happens before Landscape asks whether CDLOD may replace
+    // legacy terrain. That prevents a texture-bank flush from advertising a
+    // stale dedicated descriptor for one frame.
+    if (_terrainVk.Ready())
+        UpdateTerrainVisualDescriptors();
     _drawItems.clear();
     _capturedTerrainOpaque.reset();
     _currentDrawItem = DrawItem{};

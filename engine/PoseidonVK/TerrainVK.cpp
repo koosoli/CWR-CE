@@ -125,19 +125,18 @@ bool TerrainVK::CreateDescriptorResources()
 {
     VkPhysicalDeviceProperties properties{};
     vkGetPhysicalDeviceProperties(_physicalDevice, &properties);
-    // There are three fixed combined samplers (height, index, jitter). The
-    // variable binding is sized against the normal descriptor limits because
-    // the set is never changed while bound; UPDATE_AFTER_BIND is deliberately
-    // neither enabled nor consumed here.
-    const std::uint32_t maxCombined = std::min({properties.limits.maxDescriptorSetSampledImages,
-                                                properties.limits.maxPerStageDescriptorSampledImages,
-                                                properties.limits.maxDescriptorSetSamplers,
-                                                properties.limits.maxPerStageDescriptorSamplers});
-    if (maxCombined <= 3)
+    // Height/index/jitter are fixed combined samplers. The material layers are
+    // a variable sampled-image array paired with TerrainVK's two samplers, so
+    // layer capacity is constrained by sampled-image limits only.
+    const std::uint32_t maxSampledImages = std::min(properties.limits.maxDescriptorSetSampledImages,
+                                                    properties.limits.maxPerStageDescriptorSampledImages);
+    const std::uint32_t maxSamplers = std::min(properties.limits.maxDescriptorSetSamplers,
+                                                properties.limits.maxPerStageDescriptorSamplers);
+    if (maxSampledImages <= 3 || maxSamplers < 5)
         return false;
-    _layerCapacity = std::min(kRequestedLayerCapacity, maxCombined - 3);
+    _layerCapacity = std::min(kRequestedLayerCapacity, maxSampledImages - 3);
 
-    std::array<VkDescriptorSetLayoutBinding, 5> bindings{};
+    std::array<VkDescriptorSetLayoutBinding, 7> bindings{};
     for (std::uint32_t binding = kHeightmapBinding; binding <= kJitterMapBinding; ++binding)
     {
         bindings[binding].binding = binding;
@@ -149,15 +148,22 @@ bool TerrainVK::CreateDescriptorResources()
     bindings[kParamsBinding].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     bindings[kParamsBinding].descriptorCount = 1;
     bindings[kParamsBinding].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (const std::uint32_t binding : {kRepeatSamplerBinding, kClampSamplerBinding})
+    {
+        bindings[binding].binding = binding;
+        bindings[binding].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+        bindings[binding].descriptorCount = 1;
+        bindings[binding].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
     // Vulkan requires a variable-count binding to be the highest-numbered
-    // binding in its layout. Binding 4 is therefore reserved for native
-    // TextureVK layer images.
+    // binding in its layout. Binding 6 is the WGPU-style native layer image
+    // array; sampler selection is performed in terrain.frag.glsl.
     bindings[kTextureLayersBinding].binding = kTextureLayersBinding;
-    bindings[kTextureLayersBinding].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[kTextureLayersBinding].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     bindings[kTextureLayersBinding].descriptorCount = _layerCapacity;
     bindings[kTextureLayersBinding].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-    std::array<VkDescriptorBindingFlags, 5> bindingFlags{};
+    std::array<VkDescriptorBindingFlags, 7> bindingFlags{};
     bindingFlags[kTextureLayersBinding] = VK_DESCRIPTOR_BINDING_VARIABLE_DESCRIPTOR_COUNT_BIT |
                                           VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
     VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{};
@@ -173,9 +179,11 @@ bool TerrainVK::CreateDescriptorResources()
     if (vkCreateDescriptorSetLayout(_device, &layoutInfo, nullptr, &_descriptorSetLayout) != VK_SUCCESS)
         return false;
 
-    const std::array<VkDescriptorPoolSize, 2> poolSizes = {{
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, _layerCapacity + 3},
+    const std::array<VkDescriptorPoolSize, 4> poolSizes = {{
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3},
         {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1},
+        {VK_DESCRIPTOR_TYPE_SAMPLER, 2},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, _layerCapacity},
     }};
     VkDescriptorPoolCreateInfo poolInfo{};
     poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
@@ -200,9 +208,9 @@ bool TerrainVK::CreateDescriptorResources()
 
 bool TerrainVK::CreateVisualDescriptorResources()
 {
-    // Set 2 follows terrain.frag.glsl exactly. Bindings 0/3 are terrain-owned
-    // derived maps; bindings 1/2 must arrive from real detail/blend producers.
-    std::array<VkDescriptorSetLayoutBinding, 4> bindings{};
+    // Set 2 follows terrain.frag.glsl exactly. Bindings 0/2 are terrain-owned
+    // derived maps; binding 1 arrives from the real detail producer.
+    std::array<VkDescriptorSetLayoutBinding, 3> bindings{};
     for (std::uint32_t binding = 0; binding < bindings.size(); ++binding)
     {
         bindings[binding].binding = binding;
@@ -311,14 +319,29 @@ bool TerrainVK::CreateMapSamplers()
         info.maxLod = 0.0f;
         return vkCreateSampler(_device, &info, nullptr, &sampler) == VK_SUCCESS;
     };
+    const auto createLayerSampler = [&](VkSamplerAddressMode addressMode, VkSampler& sampler)
+    {
+        VkSamplerCreateInfo info{};
+        info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        info.magFilter = VK_FILTER_LINEAR;
+        info.minFilter = VK_FILTER_LINEAR;
+        info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        info.addressModeU = addressMode;
+        info.addressModeV = addressMode;
+        info.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        info.maxLod = VK_LOD_CLAMP_NONE;
+        return vkCreateSampler(_device, &info, nullptr, &sampler) == VK_SUCCESS;
+    };
     return createSampler(VK_FILTER_LINEAR, _heightSampler) && createSampler(VK_FILTER_NEAREST, _indexSampler) &&
-           createSampler(VK_FILTER_NEAREST, _jitterSampler) && createSampler(VK_FILTER_LINEAR, _maskSampler);
+           createSampler(VK_FILTER_LINEAR, _jitterSampler) && createSampler(VK_FILTER_LINEAR, _maskSampler) &&
+           createLayerSampler(VK_SAMPLER_ADDRESS_MODE_REPEAT, _layerRepeatSampler) &&
+           createLayerSampler(VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, _layerClampSampler);
 }
 
 bool TerrainVK::UpdateStaticDescriptors()
 {
     if (!_descriptorSet || !_heightmap.view || !_indexMap.view || !_jitterMap.view || !_paramsBuffer.buffer ||
-        !_heightSampler || !_indexSampler || !_jitterSampler)
+         !_heightSampler || !_indexSampler || !_jitterSampler || !_layerRepeatSampler || !_layerClampSampler)
         return false;
 
     const std::array<VkDescriptorImageInfo, 3> images = {{
@@ -330,7 +353,7 @@ bool TerrainVK::UpdateStaticDescriptors()
     params.buffer = _paramsBuffer.buffer;
     params.offset = 0;
     params.range = sizeof(Params);
-    std::array<VkWriteDescriptorSet, 4> writes{};
+    std::array<VkWriteDescriptorSet, 6> writes{};
     for (std::uint32_t binding = 0; binding < images.size(); ++binding)
     {
         writes[binding].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -346,6 +369,19 @@ bool TerrainVK::UpdateStaticDescriptors()
     writes[kParamsBinding].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     writes[kParamsBinding].descriptorCount = 1;
     writes[kParamsBinding].pBufferInfo = &params;
+    const std::array<VkDescriptorImageInfo, 2> layerSamplers = {{{_layerRepeatSampler, VK_NULL_HANDLE,
+                                                                    VK_IMAGE_LAYOUT_UNDEFINED},
+                                                                   {_layerClampSampler, VK_NULL_HANDLE,
+                                                                    VK_IMAGE_LAYOUT_UNDEFINED}}};
+    for (std::uint32_t binding = kRepeatSamplerBinding; binding <= kClampSamplerBinding; ++binding)
+    {
+        writes[binding].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[binding].dstSet = _descriptorSet;
+        writes[binding].dstBinding = binding;
+        writes[binding].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+        writes[binding].descriptorCount = 1;
+        writes[binding].pImageInfo = &layerSamplers[binding - kRepeatSamplerBinding];
+    }
     vkUpdateDescriptorSets(_device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     return true;
 }
@@ -383,16 +419,14 @@ bool TerrainVK::UpdateShadowComputeDescriptors()
 bool TerrainVK::UpdateVisualDescriptors()
 {
     if (!_visualDescriptorSet || !_selfShadowMask.view || !_skyVisibilityMask.view || !_maskSampler ||
-        _detailDescriptor.imageView == VK_NULL_HANDLE || _detailDescriptor.sampler == VK_NULL_HANDLE ||
-        _blendDescriptor.imageView == VK_NULL_HANDLE || _blendDescriptor.sampler == VK_NULL_HANDLE)
+        _detailDescriptor.imageView == VK_NULL_HANDLE || _detailDescriptor.sampler == VK_NULL_HANDLE)
         return false;
-    const std::array<VkDescriptorImageInfo, 4> images = {{
+    const std::array<VkDescriptorImageInfo, 3> images = {{
         {_maskSampler, _selfShadowMask.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
         _detailDescriptor,
-        _blendDescriptor,
         {_maskSampler, _skyVisibilityMask.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
     }};
-    std::array<VkWriteDescriptorSet, 4> writes{};
+    std::array<VkWriteDescriptorSet, 3> writes{};
     for (std::uint32_t binding = 0; binding < writes.size(); ++binding)
     {
         writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -403,20 +437,18 @@ bool TerrainVK::UpdateVisualDescriptors()
         writes[binding].pImageInfo = &images[binding];
     }
     vkUpdateDescriptorSets(_device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
-    _detailBlendDescriptorsReady = true;
+    _detailDescriptorsReady = true;
     _visualDescriptorsReady = _selfShadowPopulated;
     return true;
 }
 
-bool TerrainVK::UpdateVisualDescriptors(const VkDescriptorImageInfo& detail, const VkDescriptorImageInfo& blend)
+bool TerrainVK::UpdateVisualDescriptors(const VkDescriptorImageInfo& detail)
 {
     if (!_ready || detail.imageView == VK_NULL_HANDLE || detail.sampler == VK_NULL_HANDLE ||
-        blend.imageView == VK_NULL_HANDLE || blend.sampler == VK_NULL_HANDLE ||
-        detail.imageLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL || blend.imageLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        detail.imageLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
         return false;
     _detailDescriptor = detail;
-    _blendDescriptor = blend;
-    _detailBlendDescriptorsReady = false;
+    _detailDescriptorsReady = false;
     _visualDescriptorsReady = false;
     return UpdateVisualDescriptors();
 }
@@ -807,7 +839,7 @@ bool TerrainVK::RecordSelfShadowPass(VkCommandBuffer commandBuffer, float sunToL
     _lastSunToLight[2] = sunToLightZ;
     _shadowDirty = false;
     _selfShadowPopulated = true;
-    _visualDescriptorsReady = _detailBlendDescriptorsReady;
+    _visualDescriptorsReady = _detailDescriptorsReady;
     return true;
 }
 
@@ -853,20 +885,24 @@ bool TerrainVK::UpdateLayerDescriptors(const std::vector<LayerBinding>& layers)
     images.reserve(layers.size());
     for (const LayerBinding& layer : layers)
     {
-        if (!layer.sourceValid)
+        if (layer.image.imageView == VK_NULL_HANDLE || layer.image.imageLayout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+        {
             ++_telemetry.invalidLayers;
-        if (layer.usesFallback)
-            ++_telemetry.fallbackLayers;
-        if (layer.image.imageView == VK_NULL_HANDLE || layer.image.sampler == VK_NULL_HANDLE)
             return false;
-        images.push_back(layer.image);
+        }
+        // Binding 6 is VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE. Layer TextureVK
+        // samplers are intentionally discarded; bit 15 selects one of the
+        // TerrainVK-owned repeat/clamp samplers in the shader.
+        VkDescriptorImageInfo image = layer.image;
+        image.sampler = VK_NULL_HANDLE;
+        images.push_back(image);
     }
 
     VkWriteDescriptorSet write{};
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     write.dstSet = _descriptorSet;
     write.dstBinding = kTextureLayersBinding;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     write.descriptorCount = static_cast<std::uint32_t>(images.size());
     write.pImageInfo = images.data();
     vkUpdateDescriptorSets(_device, 1, &write, 0, nullptr);
@@ -896,9 +932,8 @@ void TerrainVK::Destroy(VkDevice device)
     DestroyImage(device, _selfShadowMask); DestroyImage(device, _skyVisibilityMask);
     _skyVisibilitySource.clear();
     _detailDescriptor = {};
-    _blendDescriptor = {};
     _visualDescriptorsReady = false;
-    _detailBlendDescriptorsReady = false;
+    _detailDescriptorsReady = false;
     _selfShadowPopulated = false;
     _shadowDirty = true;
     _selfShadowLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -912,7 +947,10 @@ void TerrainVK::DestroyDescriptorResources(VkDevice device)
     if (_indexSampler) vkDestroySampler(device, _indexSampler, nullptr);
     if (_jitterSampler) vkDestroySampler(device, _jitterSampler, nullptr);
     if (_maskSampler) vkDestroySampler(device, _maskSampler, nullptr);
+    if (_layerRepeatSampler) vkDestroySampler(device, _layerRepeatSampler, nullptr);
+    if (_layerClampSampler) vkDestroySampler(device, _layerClampSampler, nullptr);
     _heightSampler = _indexSampler = _jitterSampler = _maskSampler = VK_NULL_HANDLE;
+    _layerRepeatSampler = _layerClampSampler = VK_NULL_HANDLE;
     if (_descriptorPool) vkDestroyDescriptorPool(device, _descriptorPool, nullptr);
     _descriptorPool = VK_NULL_HANDLE;
     _descriptorSet = VK_NULL_HANDLE;

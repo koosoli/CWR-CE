@@ -215,16 +215,19 @@ void TextBankVK::InitDetailTextures()
         return;
 
     const ParamEntry& names = Remaster >> "CfgDetailTextures";
-    RStringB detailName = names >> "detail";
-    if (QIFStreamB::FileExist(detailName))
+    if (!_detail)
     {
-        _detail = new TextureVK(_engine);
-        _detail->SetName(detailName);
-        _detail->Init(detailName);
+        RStringB detailName = names >> "detail";
+        if (QIFStreamB::FileExist(detailName))
+        {
+            _detail = new TextureVK(_engine);
+            _detail->SetName(detailName);
+            _detail->Init(detailName);
+        }
     }
 
     RStringB specularName = names >> "specular";
-    if (QIFStreamB::FileExist(specularName))
+    if (!_specular && QIFStreamB::FileExist(specularName))
     {
         _specular = new TextureVK(_engine);
         _specular->SetName(specularName);
@@ -232,7 +235,7 @@ void TextBankVK::InitDetailTextures()
     }
 
     RStringB grassName = names >> "grass";
-    if (QIFStreamB::FileExist(grassName))
+    if (!_grass && QIFStreamB::FileExist(grassName))
     {
         _grass = new TextureVK(_engine);
         _grass->SetName(grassName);
@@ -241,7 +244,7 @@ void TextBankVK::InitDetailTextures()
     }
 
     RStringB waterName = names >> "waterBump";
-    if (QIFStreamB::FileExist(waterName))
+    if (!_waterBump && QIFStreamB::FileExist(waterName))
     {
         _waterBump = new TextureVK(_engine);
         _waterBump->SetName(waterName);
