@@ -99,6 +99,23 @@ void main()
     vec4 worldPos = world * vec4(inPosition, 1.0);
     vec3 worldNormal = normalize(mat3(world) * inNormal);
 
+    // Water is a separate transparent receiver later in the frame.  Displace
+    // it in the vertex stage so depth testing, foam/reflection shading and the
+    // visible silhouette agree; never fake waves only in the fragment shader.
+    uint initialTexGen = hasDrawConstants ? drawConstants.draws[drawIndex].texGen : kTexGenNone;
+    if (initialTexGen == kTexGenWater)
+    {
+        float t = frame.time.x;
+        vec2 p = worldPos.xz;
+        float a = dot(p, vec2(0.021, 0.014)) + t * 0.75;
+        float b = dot(p, vec2(-0.013, 0.026)) - t * 0.48;
+        worldPos.y += sin(a) * 0.22 + sin(b) * 0.13;
+        vec3 waveNormal = normalize(vec3(-0.021 * cos(a) * 0.22 + 0.013 * cos(b) * 0.13,
+                                         1.0,
+                                        -0.014 * cos(a) * 0.22 - 0.026 * cos(b) * 0.13));
+        worldNormal = normalize(mix(worldNormal, waveNormal, 0.85));
+    }
+
     // Full camera transform mirroring the GL33 vsTransform convention
     // (gl_Position = proj * view * world * pos). frame.projection already
     // carries the engine's D3D-origin row-major projection, which maps to the

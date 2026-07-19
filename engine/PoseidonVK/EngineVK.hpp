@@ -148,6 +148,7 @@ class EngineVK : public EngineDummy
     bool CreateSwapchain();
     bool CreateDepthResources();
     bool CreateWorldTarget();
+    bool CreateWorldPrepassTarget();
     bool CreateWorldCompositeDescriptorLayout();
     bool CreateWorldCompositeDescriptorSet();
     void UpdateWorldCompositeDescriptorSet(std::uint32_t exposureHistoryIndex);
@@ -230,6 +231,7 @@ class EngineVK : public EngineDummy
     void DestroyScenePipelineLayout();
     void DestroyDepthResources();
     void DestroyWorldTarget();
+    void DestroyWorldPrepassTarget();
     void DestroyWorldCompositeDescriptorResources();
     void DestroyWorldCompositePipelineLayout();
     void DestroySwapchain();
@@ -361,6 +363,9 @@ class EngineVK : public EngineDummy
     VkDeviceMemory _depthImageMemory = VK_NULL_HANDLE;
     VkImageView _depthImageView = VK_NULL_HANDLE;
     VkRenderPass _renderPass = VK_NULL_HANDLE;
+    // Opaque depth+normal prepass. It shares _worldDepthImage with the world
+    // colour pass; do not create a second depth authority for the same frame.
+    VkRenderPass _worldPrepassRenderPass = VK_NULL_HANDLE;
     VkRenderPass _worldLateRenderPass = VK_NULL_HANDLE;
     VkRenderPass _cloudRaymarchRenderPass = VK_NULL_HANDLE;
     VkRenderPass _cloudTemporalRenderPass = VK_NULL_HANDLE;
@@ -374,6 +379,10 @@ class EngineVK : public EngineDummy
     VkDeviceMemory _worldDepthImageMemory = VK_NULL_HANDLE;
     VkImageView _worldDepthImageView = VK_NULL_HANDLE;
     VkFramebuffer _worldFramebuffer = VK_NULL_HANDLE;
+    VkImage _worldNormalImage = VK_NULL_HANDLE;
+    VkDeviceMemory _worldNormalImageMemory = VK_NULL_HANDLE;
+    VkImageView _worldNormalImageView = VK_NULL_HANDLE;
+    VkFramebuffer _worldPrepassFramebuffer = VK_NULL_HANDLE;
     VkFramebuffer _worldLateFramebuffer = VK_NULL_HANDLE;
     VkFramebuffer _cloudRaymarchFramebuffer = VK_NULL_HANDLE;
     std::array<VkFramebuffer, 2> _cloudTemporalFramebuffers = {};

@@ -28,6 +28,20 @@ layout(location = 0) in vec2 vUv;
 layout(location = 1) flat in vec3 vCentreWorldRay;
 layout(location = 0) out vec4 outColor;
 
+// Same fixed filmic stock as the reference renderer.  The former ACES fit is
+// intentionally gentle and was flattening the midtones relative to both the
+// original game and the reference HDR path.
+vec3 HablePartial(vec3 x)
+{
+    return ((x * (0.15 * x + 0.10 * 0.50) + 0.20 * 0.02) /
+            (x * (0.15 * x + 0.50) + 0.20 * 0.30)) - (0.02 / 0.30);
+}
+
+vec3 HableFilmic(vec3 x)
+{
+    return HablePartial(x) / HablePartial(vec3(11.2));
+}
+
 void main()
 {
     vec4 world = texture(worldColor, vUv);
@@ -75,13 +89,22 @@ void main()
     }
 
     vec3 exposed = (scene + bloom) * eyeExposure;
-    // Narkowicz's fitted ACES filmic curve, followed by explicit sRGB for the
-    // unchanged UNORM swapchain.
-    vec3 mapped = clamp((exposed * (2.51 * exposed + 0.03)) /
-                            (exposed * (2.43 * exposed + 0.59) + 0.14),
-                        0.0, 1.0);
+    // Reference-compatible filmic shoulder plus a restrained display-space
+    // contrast grade.  Keep the grade here (after the curve), never in
+    // terrain/material shaders, so black levels and texture albedo stay
+    // consistent across every receiver.
+    vec3 mapped = HableFilmic(exposed);
+    // Midpoint between the former neutral Vulkan resolve and the reference
+    // grade.  Keep this conservative; the filmic curve already supplies most
+    // of the desired black/midtone separation.
+    mapped = clamp((mapped - vec3(0.5)) * 1.04 + vec3(0.5), 0.0, 1.0);
     vec3 srgb = mix(mapped * 12.92, 1.055 * pow(mapped, vec3(1.0 / 2.4)) - 0.055,
                     step(vec3(0.0031308), mapped));
+    // User-facing display gamma.  This is deliberately applied after the
+    // linear-to-sRGB transfer: source textures, terrain blending, and the
+    // HDR exposure contract stay untouched.  gamma=1.2 is a subtle lift over
+    // the reference-like filmic grade, not a second tone mapper.
+    srgb = pow(clamp(srgb, vec3(0.0), vec3(1.0)), vec3(1.0 / 1.2));
     // Always write alpha=1 to the swapchain — the present surface is opaque.
     // Forwarding world.a causes desktop bleed-through for any scene pixel that
     // wrote alpha < 1 (e.g. terrain layer textures, sky, transparent geometry).

@@ -333,12 +333,20 @@ void main()
     }
     else if (family == kFamilyWater)
     {
-        // Water: bump-normal from tex1 rgb, specular highlight from normal dot.
-        vec3  bumpN    = normalize(c1.rgb * 2.0 - 1.0);
-        float specular = max(dot(bumpN, vec3(0.0, 1.0, 0.0)), 0.0f);
-        specular = pow(specular, 8.0);
-        baseColor = c0.rgb * light + vec3(specular * 0.4);
-        baseAlpha = c0.a;
+        // Animated geometric waves arrive from scene.vert.  Combine the
+        // legacy bump with that normal, then use Fresnel to reflect the live
+        // sky/sun rather than painting a fixed white highlight onto water.
+        vec3 bumpN = normalize(c1.rgb * 2.0 - 1.0);
+        vec3 n = normalize(mix(normalize(vWorldNormal), bumpN, 0.38));
+        vec3 viewDir = normalize(-vWorldPos);
+        float fresnel = pow(1.0 - max(dot(n, viewDir), 0.0), 5.0);
+        vec3 sunDir = normalize(-frame.sunDirection.xyz);
+        float sunGlint = pow(max(dot(reflect(-sunDir, n), viewDir), 0.0), 96.0);
+        vec3 horizon = mix(frame.fogColor.rgb * 0.65, vec3(0.32, 0.48, 0.68),
+                           clamp(sunDir.y * 0.5 + 0.5, 0.0, 1.0));
+        vec3 reflectedSky = horizon + vec3(1.0, 0.78, 0.48) * sunGlint;
+        baseColor = mix(c0.rgb * light, reflectedSky, 0.18 + 0.72 * fresnel);
+        baseAlpha = clamp(0.38 + 0.52 * fresnel, 0.0, 0.92);
     }
     else if (family == kFamilyFlat)
     {
