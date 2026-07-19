@@ -143,6 +143,11 @@ class Application
     // GetMenuInitWorld().
     virtual bool UseDemoWorld() const { return IsDemo(); }
 
+    // Keep a presentation-only menu clock policy out of authored missions.
+    // The GameDemo background is intentionally initialized at midday, while
+    // mission Intel still controls every playable mission's clock.
+    virtual bool UseMiddayMenuCutscene() const { return false; }
+
   protected:
     // Lifecycle hooks
     virtual bool InitializeMemorySystem() = 0;

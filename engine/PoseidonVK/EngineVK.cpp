@@ -484,12 +484,10 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
     // The cached sky is the Vulkan sky path; retain the environment switch as
     // an explicit compatibility opt-out rather than making it experimental.
     _proceduralSkyEnabled = true;
-    // Volumetric clouds are a completed GPU path (volume build, raymarch,
-    // temporal resolve and composition), so make them part of the normal
-    // Vulkan renderer rather than hiding them behind an undocumented opt-in.
-    // POSEIDON_VK_VOLUMETRIC_CLOUDS=0 remains the explicit compatibility
-    // escape hatch for problematic drivers.
-    _volumetricCloudsEnabled = true;
+    // The current cloud path is an experimental procedural field. Keep the
+    // stable sky as the default until the FP-style world-stable cloud system
+    // and depth-correct composition have visual parity.
+    _volumetricCloudsEnabled = false;
     if (const char* value = std::getenv("POSEIDON_VK_PROCEDURAL_SKY"))
         _proceduralSkyEnabled = std::strcmp(value, "0") != 0;
     if (const char* value = std::getenv("POSEIDON_VK_VOLUMETRIC_CLOUDS"))

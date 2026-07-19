@@ -33,11 +33,24 @@ their maturity, coupling, and hardware assumptions still vary substantially.
   `Frame`/`FramePlan` pipeline alongside GL33.
 - The current Vulkan requirement is Vulkan 1.3. The instance and physical
   device checks use `VK_API_VERSION_1_3`.
-- Vulkan has real scene, texture, HUD, shadow, and six shader-family paths,
-  but raster parity is not yet proven. The README still tracks missing visual
-  captures and known material/fallback gaps.
-- A legacy software-T&L fallback path currently has a sky/cloud/horizon order
-  regression. Fixing that regression is the next renderer milestone.
+- Vulkan has scene, texture, HUD, software-T&L routing, CSM, an FP16 world
+  target, cached sky-map bake, HDR composition, GPU timing, and feature-local
+  compute synchronization. Those systems build, but visual parity remains
+  unproven.
+- The legacy software-T&L sky/cloud/horizon routing regression is fixed in
+  source. Its GL33/Vulkan capture comparison is still required before it is
+  called parity-complete.
+- Dedicated TerrainVK has CDLOD selection, native layer descriptors, detail,
+  self-shadow, and sky visibility resources. It remains safety-disabled until
+  camera-relative coordinates and authored-material visual parity are captured.
+- The current cloud path has density, distance, light, raymarch, and composite
+  passes, but is an experimental procedural slab. It is not a completed cloud
+  implementation: it can publish an empty field and has no cloud-field
+  readiness or occupancy diagnostics.
+- The default/demo clock behavior is not yet covered by deterministic tests.
+  Existing demo fixtures include a 05:35 scene, so a sunset-like presentation
+  must not be diagnosed as a renderer sign error without recording the actual
+  selected mission time and weather.
 
 ## Reference Policy
 
@@ -122,17 +135,18 @@ Mesh shaders, sparse residency, fragment barycentrics, specialized subgroup
 features, and very high-cost reflections are optional. Provide conventional
 vertex/index, billboard, or disabled-quality fallbacks.
 
-## Phase 1 - Parity and Measurement Gate
+## Phase 1 - Parity, Time, and Measurement Gate
 
 This phase blocks broad renderer modernization.
 
-1. Fix the legacy software-T&L fallback path.
-   - Retain render descriptor data with fallback batches instead of flattening
-     all geometry into one late depth-disabled screen list.
-   - Schedule legacy sky, clouds, and clipped horizon before opaque foreground
-     geometry as required by their descriptor semantics.
-   - Keep true UI, HUD, and screen-space overlays late and depth-disabled.
-   - Honor depth and blend behavior where the legacy descriptor requires it.
+1. Lock deterministic presentation fixtures before broad renderer changes.
+   - Add explicit dawn, noon, dusk, and night mission fixtures with recorded
+     calendar time, weather, fog, latitude, and expected sun elevation.
+   - Use a noon fixture for Demo startup validation. Do not silently overwrite
+     authored mission times; identify the Demo launch/config seam if a product
+     default must differ from mission content.
+   - Fix every world-config initialization path to preserve the parsed
+     hour/minute precision after setting its calendar date.
 2. Close known raster gaps.
    - `texMat` UV scale
    - material alpha in shadow rendering
@@ -146,8 +160,11 @@ This phase blocks broad renderer modernization.
    - Validation-clean smoke tests, RenderDoc labels, resize/device-loss checks,
      and CPU/GPU timing baselines.
 4. Compare CSM behavior with GL33 before replacing its algorithm.
+5. Record the sky/cloud input contract per fixture: clock, sun travel
+   direction, night factor, overcast, legacy cloud alpha, cloud field
+   readiness, cloud occupancy, HDR exposure, and final GPU pass timings.
 
-## Phase 2 - Renderer Foundation
+## Phase 2 - Renderer Foundation and Linear Presentation
 
 Build the infrastructure that modern passes require before adding effects.
 
@@ -158,11 +175,18 @@ Build the infrastructure that modern passes require before adding effects.
   barrier tracking, and a small explicit pass scheduler.
 - Add staged upload rings, residency/accounting telemetry, pipeline-cache
   diagnostics, and per-pass GPU timing.
-- Add compute pipeline, storage-buffer, and synchronization infrastructure.
+- Generalize the existing feature-local compute pipeline, storage-buffer,
+  timestamp, and synchronization infrastructure only when a second subsystem
+  needs the same ownership model.
 - Publish a device capability report that records format, MSAA, sampled-depth,
   descriptor-indexing, indirect-draw, and compression support.
 - Add focused RAII helpers only as new images, buffers, descriptors, and pass
   resources need clear ownership. Do not perform a broad wrapper rewrite.
+- Replace the current encoded-source HDR composition with one linear
+  `R16G16B16A16_SFLOAT` scene-radiance contract before porting more atmosphere
+  work. Port the WGPU reference's resize-safe bloom pyramid and persistent
+  GPU-only exposure history as one presentation milestone; do not mix transfer
+  functions between scene, sky, clouds, and the final tonemap.
 
 ## Phase 3 - Asset and Material Foundation
 
@@ -185,21 +209,36 @@ This track can run in parallel with Phase 2.
 - Treat lip-sync generation and material conversion as independently licensed
   offline tools with generated-asset manifests.
 
-## Phase 4 - HDR and Presentation
+## Phase 4 - Atmosphere and Clouds
 
-- Render the scene to a linear `R16G16B16A16_SFLOAT` intermediate target.
-- Add exposure controls, bloom, tone mapping, presentation conversion, and an
-  explicit UI-after-tonemap composition policy.
-- Add night vision as a post-process effect in this pipeline.
-- Define internal resolution, dynamic-resolution, and upscaling policy.
-- Add FSR only after the policy and pass chain exist; preserve AMD licensing
-  notices and compose UI at the correct resolution.
+- Stabilize the shared sky/time interface first. Vulkan must consume explicit
+  atmospheric color/intensity semantics or document a measured intentional
+  divergence from GL33; direction alone is insufficient proof of parity.
+- Replace the temporary procedural cloud slab with the necessary FP_269-style
+  cloud architecture as a single gated milestone:
+  - cloud-layer parameters and owned cloud-map, base-noise, detail-noise, and
+    blue-noise resources;
+  - layered density/profile generation and a compatible multi-pass distance
+    transform;
+  - double-buffered distance/light fields with staged publication only after
+    density, distance, light, and barriers are complete;
+  - spherical-shell ray intersection, blue-noise jitter, distance-aware
+    stepping, and depth-ordered integration through the existing composition
+    seam or a proven equivalent;
+  - GPU-visible field-ready and occupied diagnostics so empty weather, failed
+    build, and failed composition are distinguishable.
+- Preserve clear-weather zero density. A temporary visual fallback is allowed
+  only to keep the build runnable and must be labeled and removed when the
+  authored cloud inputs ship.
+- Keep rain and particles separate until cloud/weather state has deterministic
+  validation fixtures.
 
 ## Phase 5 - Modern Visual Base
 
 - Improve CSM split distribution, transition blending, filtering, and bias.
 - Add procedural clear sky, sun, atmosphere, aerial perspective, environment
-  lighting, and ordinary instanced/billboard stars as a baseline.
+  lighting, and ordinary instanced/billboard stars only after Phase 4's shared
+  time and color contract is validated.
 - Add an MSAA-ready depth+normal prepass with identical transforms and
   alpha-cutout coverage to color rendering.
 - Add sampleable depth/normal consumers: Hi-Z, SSAO/GTAO, contact effects, and
@@ -208,8 +247,8 @@ This track can run in parallel with Phase 2.
   reflections in that order. Do not make FFT ocean a baseline requirement.
 - Add clustered Forward+ lighting after HDR. It may proceed alongside prepass
   work, but water must not wait for all Forward+ work.
-- Design clouds after the sky interface is stable; add rain after particle and
-  weather infrastructure is proven.
+- Cloud architecture is defined in Phase 4; add rain after its weather
+  interface and particle infrastructure are proven.
 
 ## Phase 6 - GPU Scale and Advanced Visuals
 
@@ -222,8 +261,9 @@ This track can run in parallel with Phase 2.
   selection is a real multiview bottleneck.
 - Add GPU particles for smoke, fire, explosions, rain, and environmental FX
   after compute timing and synchronization are stable.
-- Add volumetric clouds, full planar reflections, compute skinning, meshlet
-  paths, and mesh shaders only as optional capability tiers.
+- Add full planar reflections, compute skinning, meshlet paths, and mesh
+  shaders only as optional capability tiers. Volumetric clouds belong to the
+  validated Phase 4 atmosphere milestone, not this deferred bucket.
 
 ## Phase 7 - Gameplay and Simulation
 

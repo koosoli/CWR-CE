@@ -1,5 +1,6 @@
 
 #include <Poseidon/UI/Options/OptionsShell.hpp>
+#include <Poseidon/Core/Application.hpp>
 #include <Poseidon/Core/Config/EngineConfig.hpp>
 #include <Poseidon/Core/Config/UserConfig.hpp>
 #include <Poseidon/UI/Map/UIMap.hpp>
@@ -13,6 +14,9 @@
 #include <Poseidon/UI/Settings/GameSettingsConfig.hpp>
 
 #include <Poseidon/World/Scene/Camera/Camera.hpp>
+#include <Poseidon/World/Scene/Scene.hpp>
+#include <Poseidon/World/World.hpp>
+#include <Poseidon/Graphics/Rendering/Lighting/Lights.hpp>
 #include <Poseidon/Core/Progress.hpp>
 
 #include <Poseidon/IO/Serialization/ParamArchive.hpp>
@@ -2130,6 +2134,16 @@ void StartRandomCutscene(RString world)
         GLOB_WORLD->SwitchLandscape(GetWorldName(world));
         GWorld->ActivateAddons(CurrentTemplate.addOns);
         GLOB_WORLD->InitGeneral(CurrentTemplate.intel);
+        if (GApp && GApp->UseMiddayMenuCutscene())
+        {
+            // This runs only for the GameDemo menu cutscene. Keep its authored
+            // calendar day, but make the default presentation unambiguously day.
+            const float dayStart = toIntFloor(Glob.clock.GetTimeInYear() / OneDay) * OneDay;
+            Glob.clock.SetTimeInYear(dayStart + 12.0f * OneHour);
+            Glob.clock.SetTimeOfDay(12, 0);
+            GLOB_WORLD->GetScene()->MainLight()->Recalculate(GLOB_WORLD);
+            GLOB_WORLD->GetScene()->MainLightChanged();
+        }
         GLOB_WORLD->InitVehicles(GModeIntro, CurrentTemplate);
         //		GWorld->EnableSimulation(true);
     }

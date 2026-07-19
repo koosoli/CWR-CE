@@ -356,11 +356,16 @@ void World::InitGeneral(const ParamEntry& cfg)
     RString date = cfg >> "startDate";
     int year;
     float timeInYear = Glob.clock.ScanDateTime(date, time, year);
+    int hour = 0;
+    int minute = 0;
+    const bool hasClockTime = sscanf(time, "%d:%d", &hour, &minute) == 2;
     if (year < 100)
     {
         year += 1900;
     }
     Glob.clock.SetTimeInYear(timeInYear);
+    if (hasClockTime)
+        Glob.clock.SetTimeOfDay(hour, minute);
     Glob.clock.SetYear(year);
     LightSun* sun = _scene.MainLight();
     sun->Recalculate(this);

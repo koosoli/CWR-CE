@@ -22,7 +22,11 @@ void main()
 {
     const vec2 positions[3] = vec2[](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
     vNdc = positions[gl_VertexIndex];
-    vUv = vNdc * 0.5 + 0.5;
+    // The cloud passes use a negative-height Vulkan viewport. Keep the clip
+    // ray in its native convention, but flip sampled depth UVs to physical
+    // framebuffer coordinates so clouds cannot use terrain from the opposite
+    // vertical half of the screen as their depth terminator.
+    vUv = vec2(vNdc.x * 0.5 + 0.5, 0.5 - vNdc.y * 0.5);
     gl_Position = vec4(vNdc, 0.0, 1.0);
 
     vec4 viewRay = inverse(frame.projection) * vec4(vNdc, 0.0, 1.0);

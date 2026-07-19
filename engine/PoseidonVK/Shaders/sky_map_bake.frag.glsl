@@ -77,6 +77,11 @@ float ValueNoise3(vec3 p)
 
 float SkyCloudCoverage(vec3 ray)
 {
+    // The procedural deck is paired with the experimental volumetric path.
+    // Keep the stable cached sky free of a camera-projected fallback band when
+    // volumetric clouds are disabled (wind.w is uploaded as that feature flag).
+    if (frame.wind.w <= 0.5)
+        return 0.0;
     // Project the upper hemisphere onto a distant horizontal weather plane.
     // Near-horizon rays clamp safely, preventing the familiar stretched
     // billboard band while retaining a broad, readable cloud deck.

@@ -1,0 +1,4 @@
+tags = ["exclusive", "headful", "rendering", "shadows"]
+binary = "PoseidonGameDemo"
+mission = "tests/integration/missions/coastal_daylight.Demo"
+timeout = 120
