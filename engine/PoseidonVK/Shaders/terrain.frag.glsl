@@ -212,11 +212,11 @@ void main()
                               tileUvDx * kDetailTileScale, tileUvDy * kDetailTileScale);
     albedo.rgb *= mix(vec3(1.0), clamp(detail.rgb * 2.0, vec3(0.0), vec3(2.0)), detail.a);
 
-    // Terrain vertices and the scene pass both carry absolute world positions.
-    // Keeping the terrain receiver on that contract lets it share the world
-    // depth attachment with structures and other opaque geometry.
-    vec2 worldXZ = vWorldPos.xz;
-    float worldY = vWorldPos.y;
+    // vWorldPos is camera-relative like ordinary scene geometry. Terrain maps
+    // are world-aligned, so reconstruct absolute coordinates only for them.
+    vec3 worldPos = vWorldPos + frame.camPos.xyz;
+    vec2 worldXZ = worldPos.xz;
+    float worldY = worldPos.y;
 
     // The self-shadow resource is world-aligned and deliberately has an
     // extended (normally 2x) grid.  It stores a ceiling rather than a baked

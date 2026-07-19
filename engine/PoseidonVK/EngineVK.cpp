@@ -484,6 +484,12 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
     // The cached sky is the Vulkan sky path; retain the environment switch as
     // an explicit compatibility opt-out rather than making it experimental.
     _proceduralSkyEnabled = true;
+    // Volumetric clouds are a completed GPU path (volume build, raymarch,
+    // temporal resolve and composition), so make them part of the normal
+    // Vulkan renderer rather than hiding them behind an undocumented opt-in.
+    // POSEIDON_VK_VOLUMETRIC_CLOUDS=0 remains the explicit compatibility
+    // escape hatch for problematic drivers.
+    _volumetricCloudsEnabled = true;
     if (const char* value = std::getenv("POSEIDON_VK_PROCEDURAL_SKY"))
         _proceduralSkyEnabled = std::strcmp(value, "0") != 0;
     if (const char* value = std::getenv("POSEIDON_VK_VOLUMETRIC_CLOUDS"))
@@ -2865,8 +2871,148 @@ bool EngineVK::CreateWorldTarget()
     return true;
 }
 
+bool EngineVK::CreateWorldPrepassTarget()
+{
+    if (!_worldDepthImageView || _swapchainExtent.width == 0 || _swapchainExtent.height == 0)
+        return false;
+    constexpr VkFormat kNormalFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    VkFormatProperties properties{};
+    vkGetPhysicalDeviceFormatProperties(_physicalDevice, kNormalFormat, &properties);
+    const VkFormatFeatureFlags required = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+    if ((properties.optimalTilingFeatures & required) != required)
+    {
+        LOG_ERROR(Graphics, "Vulkan: depth-normal prepass requires a sampled FP16 colour attachment");
+        return false;
+    }
+    DestroyWorldPrepassTarget();
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = kNormalFormat;
+    imageInfo.extent = {_swapchainExtent.width, _swapchainExtent.height, 1};
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateImage(_device, &imageInfo, nullptr, &_worldNormalImage) != VK_SUCCESS)
+        return false;
+    VkMemoryRequirements requirements{};
+    vkGetImageMemoryRequirements(_device, _worldNormalImage, &requirements);
+    const uint32_t memoryType =
+        vk::FindMemoryType(_physicalDevice, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (memoryType == vk::kInvalidMemoryType)
+    {
+        DestroyWorldPrepassTarget();
+        return false;
+    }
+    VkMemoryAllocateInfo allocation{};
+    allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocation.allocationSize = requirements.size;
+    allocation.memoryTypeIndex = memoryType;
+    if (vkAllocateMemory(_device, &allocation, nullptr, &_worldNormalImageMemory) != VK_SUCCESS ||
+        vkBindImageMemory(_device, _worldNormalImage, _worldNormalImageMemory, 0) != VK_SUCCESS)
+    {
+        DestroyWorldPrepassTarget();
+        return false;
+    }
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = _worldNormalImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = kNormalFormat;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.layerCount = 1;
+    if (vkCreateImageView(_device, &viewInfo, nullptr, &_worldNormalImageView) != VK_SUCCESS)
+    {
+        DestroyWorldPrepassTarget();
+        return false;
+    }
+    VkAttachmentDescription attachments[2]{};
+    attachments[0].format = kNormalFormat;
+    attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[0].finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    attachments[1].format = _depthFormat;
+    attachments[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    attachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachments[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    attachments[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    VkAttachmentReference color{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+    VkAttachmentReference depth{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &color;
+    subpass.pDepthStencilAttachment = &depth;
+    VkSubpassDependency dependencies[2]{};
+    dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[0].dstSubpass = 0;
+    dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[1].srcSubpass = 0;
+    dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+    VkRenderPassCreateInfo passInfo{};
+    passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    passInfo.attachmentCount = 2;
+    passInfo.pAttachments = attachments;
+    passInfo.subpassCount = 1;
+    passInfo.pSubpasses = &subpass;
+    passInfo.dependencyCount = 2;
+    passInfo.pDependencies = dependencies;
+    if (vkCreateRenderPass(_device, &passInfo, nullptr, &_worldPrepassRenderPass) != VK_SUCCESS)
+    {
+        DestroyWorldPrepassTarget();
+        return false;
+    }
+    VkImageView views[] = {_worldNormalImageView, _worldDepthImageView};
+    VkFramebufferCreateInfo framebufferInfo{};
+    framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    framebufferInfo.renderPass = _worldPrepassRenderPass;
+    framebufferInfo.attachmentCount = 2;
+    framebufferInfo.pAttachments = views;
+    framebufferInfo.width = _swapchainExtent.width;
+    framebufferInfo.height = _swapchainExtent.height;
+    framebufferInfo.layers = 1;
+    if (vkCreateFramebuffer(_device, &framebufferInfo, nullptr, &_worldPrepassFramebuffer) != VK_SUCCESS)
+    {
+        DestroyWorldPrepassTarget();
+        return false;
+    }
+    SetObjectName(VK_OBJECT_TYPE_IMAGE, VulkanObjectHandle(_worldNormalImage), "PoseidonVK World Prepass Normal");
+    SetObjectName(VK_OBJECT_TYPE_RENDER_PASS, VulkanObjectHandle(_worldPrepassRenderPass), "PoseidonVK World Depth Normal Prepass");
+    SetObjectName(VK_OBJECT_TYPE_FRAMEBUFFER, VulkanObjectHandle(_worldPrepassFramebuffer), "PoseidonVK World Prepass Framebuffer");
+    return true;
+}
+
+void EngineVK::DestroyWorldPrepassTarget()
+{
+    if (_worldPrepassFramebuffer) vkDestroyFramebuffer(_device, _worldPrepassFramebuffer, nullptr);
+    if (_worldPrepassRenderPass) vkDestroyRenderPass(_device, _worldPrepassRenderPass, nullptr);
+    if (_worldNormalImageView) vkDestroyImageView(_device, _worldNormalImageView, nullptr);
+    if (_worldNormalImage) vkDestroyImage(_device, _worldNormalImage, nullptr);
+    if (_worldNormalImageMemory) vkFreeMemory(_device, _worldNormalImageMemory, nullptr);
+    _worldPrepassFramebuffer = VK_NULL_HANDLE;
+    _worldPrepassRenderPass = VK_NULL_HANDLE;
+    _worldNormalImageView = VK_NULL_HANDLE;
+    _worldNormalImage = VK_NULL_HANDLE;
+    _worldNormalImageMemory = VK_NULL_HANDLE;
+}
+
 void EngineVK::DestroyWorldTarget()
 {
+    DestroyWorldPrepassTarget();
     if (_worldFramebuffer)
     {
         vkDestroyFramebuffer(_device, _worldFramebuffer, nullptr);
@@ -3510,12 +3656,18 @@ bool EngineVK::CreateScenePipeline()
     if (_device)
     {
         _scenePipelineCache.Destroy(_device);
+        _worldPrepassScenePipelineCache.Destroy(_device);
         _cockpitScenePipelineCache.Destroy(_device);
         _worldLateScenePipelineCache.Destroy(_device);
         if (_scenePipeline)
         {
             vkDestroyPipeline(_device, _scenePipeline, nullptr);
             _scenePipeline = VK_NULL_HANDLE;
+        }
+        if (_worldPrepassScenePipeline)
+        {
+            vkDestroyPipeline(_device, _worldPrepassScenePipeline, nullptr);
+            _worldPrepassScenePipeline = VK_NULL_HANDLE;
         }
         if (_cockpitScenePipeline)
         {
@@ -3537,9 +3689,15 @@ bool EngineVK::CreateScenePipeline()
             vkDestroyShaderModule(_device, _sceneFragmentModule, nullptr);
             _sceneFragmentModule = VK_NULL_HANDLE;
         }
+        if (_scenePrepassFragmentModule)
+        {
+            vkDestroyShaderModule(_device, _scenePrepassFragmentModule, nullptr);
+            _scenePrepassFragmentModule = VK_NULL_HANDLE;
+        }
     }
     std::vector<uint32_t> vertexSpirv;
     std::vector<uint32_t> fragmentSpirv;
+    std::vector<uint32_t> prepassFragmentSpirv;
     std::string error;
     std::string sceneVertexSource = kSceneVertexShader;
     if (_gpuSceneEnabled)
@@ -3566,6 +3724,21 @@ bool EngineVK::CreateScenePipeline()
         LOG_ERROR(Graphics, "Vulkan: scene fragment shader compile failed: {}", error);
         return false;
     }
+    std::string prepassFragmentSource = kSceneFragmentShader;
+    const std::size_t prepassVersion = prepassFragmentSource.find("#version");
+    const std::size_t prepassLineEnd = prepassVersion == std::string::npos ? std::string::npos
+                                                                             : prepassFragmentSource.find('\n', prepassVersion);
+    if (prepassLineEnd == std::string::npos)
+    {
+        LOG_ERROR(Graphics, "Vulkan: scene prepass fragment shader has no #version directive");
+        return false;
+    }
+    prepassFragmentSource.insert(prepassLineEnd + 1, "#define POSEIDON_PREPASS 1\n");
+    if (!CompileBootstrapShader(prepassFragmentSource.c_str(), EShLangFragment, prepassFragmentSpirv, error))
+    {
+        LOG_ERROR(Graphics, "Vulkan: scene prepass fragment shader compile failed: {}", error);
+        return false;
+    }
 
     auto createShaderModule = [&](const std::vector<uint32_t>& spirv, const char* name, VkShaderModule& module)
     {
@@ -3585,13 +3758,17 @@ bool EngineVK::CreateScenePipeline()
 
     VkShaderModule vertexModule = VK_NULL_HANDLE;
     VkShaderModule fragmentModule = VK_NULL_HANDLE;
+    VkShaderModule prepassFragmentModule = VK_NULL_HANDLE;
     if (!createShaderModule(vertexSpirv, "PoseidonVK Scene Vertex Shader", vertexModule) ||
-        !createShaderModule(fragmentSpirv, "PoseidonVK Scene Fragment Shader", fragmentModule))
+        !createShaderModule(fragmentSpirv, "PoseidonVK Scene Fragment Shader", fragmentModule) ||
+        !createShaderModule(prepassFragmentSpirv, "PoseidonVK Scene Prepass Fragment Shader", prepassFragmentModule))
     {
         if (vertexModule)
             vkDestroyShaderModule(_device, vertexModule, nullptr);
         if (fragmentModule)
             vkDestroyShaderModule(_device, fragmentModule, nullptr);
+        if (prepassFragmentModule)
+            vkDestroyShaderModule(_device, prepassFragmentModule, nullptr);
         return false;
     }
 
@@ -3680,6 +3857,17 @@ bool EngineVK::CreateScenePipeline()
     VkResult result =
         vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &_scenePipeline);
 
+    if (result == VK_SUCCESS && _worldPrepassRenderPass)
+    {
+        VkPipelineShaderStageCreateInfo prepassStages[2] = {shaderStages[0], shaderStages[1]};
+        prepassStages[1].module = prepassFragmentModule;
+        VkGraphicsPipelineCreateInfo prepassInfo = pipelineInfo;
+        prepassInfo.pStages = prepassStages;
+        prepassInfo.renderPass = _worldPrepassRenderPass;
+        result = vkCreateGraphicsPipelines(_device, VK_NULL_HANDLE, 1, &prepassInfo, nullptr,
+                                           &_worldPrepassScenePipeline);
+    }
+
     if (result == VK_SUCCESS && _volumetricCloudsEnabled)
     {
         VkPipelineDepthStencilStateCreateInfo worldLateDepthStencil =
@@ -3702,6 +3890,7 @@ bool EngineVK::CreateScenePipeline()
     // They will be destroyed in DestroyScenePipelineLayout.
     _sceneVertexModule = vertexModule;
     _sceneFragmentModule = fragmentModule;
+    _scenePrepassFragmentModule = prepassFragmentModule;
 
     if (result != VK_SUCCESS)
     {
@@ -3720,6 +3909,10 @@ bool EngineVK::CreateScenePipeline()
     // Initialise the pipeline cache with the fixed state shared across all variants.
     _scenePipelineCache.Init(_device, _renderPass, _scenePipelineLayout, _sceneVertexModule, _sceneFragmentModule,
                               vertexInput, inputAssembly, viewportState, multisampling);
+    if (_worldPrepassRenderPass)
+        _worldPrepassScenePipelineCache.Init(_device, _worldPrepassRenderPass, _scenePipelineLayout,
+                                             _sceneVertexModule, _scenePrepassFragmentModule, vertexInput,
+                                             inputAssembly, viewportState, multisampling);
     if (_volumetricCloudsEnabled)
     {
         _worldLateScenePipelineCache.Init(_device, _worldLateRenderPass, _scenePipelineLayout, _sceneVertexModule,
@@ -5946,6 +6139,7 @@ void EngineVK::DestroySwapchain()
     // Cached pipelines reference the render pass destroyed below. They must be
     // recreated for the new swapchain's render pass and viewport dimensions.
     _scenePipelineCache.Destroy(_device);
+    _worldPrepassScenePipelineCache.Destroy(_device);
     _cockpitScenePipelineCache.Destroy(_device);
     _worldLateScenePipelineCache.Destroy(_device);
     // This pipeline bakes the active render pass and viewport. Maps and their
@@ -6293,6 +6487,11 @@ void EngineVK::PresentBootstrapFrame()
     {
         DiscardRecordedTextureUploads();
         return;
+    }
+    if (_scenePrepassFragmentModule)
+    {
+        vkDestroyShaderModule(_device, _scenePrepassFragmentModule, nullptr);
+        _scenePrepassFragmentModule = VK_NULL_HANDLE;
     }
 
     vkResetFences(_device, 1, &_inFlight);

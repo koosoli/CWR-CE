@@ -385,6 +385,15 @@ void main()
         discard;
     }
 
+#ifdef POSEIDON_PREPASS
+    // The prepass must exercise exactly the same alpha/discard decisions as
+    // the colour replay.  Store a world-space normal in an attachment that is
+    // later available to screen-space consumers (Hi-Z/SSR/AO); depth itself is
+    // the shared attachment authority for both passes.
+    outColor = vec4(normalize(receiverNormal) * 0.5 + 0.5, 1.0);
+    return;
+#endif
+
     if (family == kFamilyShadow)
     {
         outColor = vec4(0.0, 0.0, 0.0, baseAlpha);

@@ -48,6 +48,15 @@ void main()
     const ivec3 dimensions = ivec3(96, 48, 96);
     ivec3 voxel = ivec3(gl_GlobalInvocationID);
     if (any(greaterThanEqual(voxel, dimensions))) return;
+    // cloudWeather.z is the authoritative density multiplier.  Do not leave a
+    // residual wisp field in clear weather: the distance and light passes must
+    // see an entirely empty volume as well as the raymarcher.
+    float weatherDensity = clamp(frame.cloudWeather.z, 0.0, 1.0);
+    if (weatherDensity <= 0.0)
+    {
+        imageStore(cloudDensity, voxel, vec4(0.0));
+        return;
+    }
     float halfExtent = clamp(frame.cloudGeometry.z, 16384.0, 131072.0) * 0.5;
     float extent = halfExtent * 2.0;
     vec2 volumeOrigin = floor(frame.cloudOrigin.xz / extent + 0.5) * extent;
@@ -59,11 +68,19 @@ void main()
     uint seed = uint(max(frame.skyVisibility.z, 0.0));
     float macro = ValueNoise(p, seed) * 0.55 + ValueNoise(p * 2.07 + 19.7, seed) * 0.30;
     float erosion = ValueNoise(p * 4.13 - 7.1, seed);
-    float coverage = mix(0.72, 0.38, clamp(frame.cloudWeather.x, 0.0, 1.0));
+    // Keep the volume's weather threshold in lockstep with the sky-map deck.
+    // At the authored overcast of about 0.5 this retains broken body clouds,
+    // while the lower shoulder supplies sparse material between them.
+    float coverage = mix(0.50, 0.24, clamp(frame.cloudWeather.x, 0.0, 1.0));
+    float body = smoothstep(coverage - 0.14, coverage + 0.12, macro);
+    float wisps = smoothstep(coverage - 0.28, coverage - 0.02, macro) * 0.34;
     float vertical = clamp(uv.y / 0.30, 0.0, 1.0) * (1.0 - clamp((uv.y - 0.62) / 0.38, 0.0, 1.0));
     float edge = max(abs(uv.x * 2.0 - 1.0), abs(uv.z * 2.0 - 1.0));
     float edgeFade = 1.0 - clamp((edge - 0.80) / 0.18, 0.0, 1.0);
-    float density = max(macro - coverage - (1.0 - erosion) * 0.075, 0.0) * vertical * edgeFade *
-                    clamp(frame.cloudWeather.z, 0.0, 1.0);
+    // Wisp density remains above the distance-field occupancy cutoff in its
+    // visible portions, so conservative empty-space skipping cannot erase it.
+    float materialDensity = max(body * 0.20, wisps * 0.22);
+    float erosionFade = mix(0.65, 1.0, erosion);
+    float density = materialDensity * erosionFade * vertical * edgeFade * weatherDensity;
     imageStore(cloudDensity, voxel, vec4(density, 0.0, 0.0, 1.0));
 }

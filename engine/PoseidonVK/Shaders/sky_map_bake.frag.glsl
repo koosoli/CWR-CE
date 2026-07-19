@@ -52,6 +52,52 @@ float Hash12(vec2 p)
     return fract((p3.x + p3.y) * p3.z);
 }
 
+// A sky-map cloud layer is deliberately separate from the volumetric field:
+// the latter supplies depth-aware aerial clouds, while this guarantees that
+// the sky remains visibly clouded during its first volume build and whenever
+// the camera cannot intersect the finite cloud slab.  It is evaluated on the
+// GPU while baking the persistent environment map, never on the CPU.
+float Hash13(vec3 p)
+{
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 31.32);
+    return fract((p.x + p.y) * p.z);
+}
+
+float ValueNoise3(vec3 p)
+{
+    vec3 cell = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(Hash13(cell), Hash13(cell + vec3(1, 0, 0)), f.x),
+                   mix(Hash13(cell + vec3(0, 1, 0)), Hash13(cell + vec3(1, 1, 0)), f.x), f.y),
+               mix(mix(Hash13(cell + vec3(0, 0, 1)), Hash13(cell + vec3(1, 0, 1)), f.x),
+                   mix(Hash13(cell + vec3(0, 1, 1)), Hash13(cell + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+
+float SkyCloudCoverage(vec3 ray)
+{
+    // Project the upper hemisphere onto a distant horizontal weather plane.
+    // Near-horizon rays clamp safely, preventing the familiar stretched
+    // billboard band while retaining a broad, readable cloud deck.
+    if (ray.y <= 0.015)
+        return 0.0;
+    vec2 plane = ray.xz / max(ray.y, 0.12);
+    vec3 p = vec3(plane * 0.52, 0.0) + vec3(frame.windOffset.xz * 0.00003, frame.skyVisibility.z * 0.013);
+    float shape = ValueNoise3(p) * 0.52 + ValueNoise3(p * 2.03 + 17.3) * 0.31 +
+                  ValueNoise3(p * 4.07 - 9.1) * 0.17;
+    // Weather uses overcast=0.5 in the default mission. The former threshold
+    // made that state almost empty after the low-frequency noise blend, which
+    // is why a fully running cloud pipeline could still look like clear sky.
+    float coverage = mix(0.50, 0.24, clamp(frame.cloudWeather.x, 0.0, 1.0));
+    float body = smoothstep(coverage - 0.14, coverage + 0.12, shape);
+    float horizonFade = smoothstep(0.005, 0.12, ray.y);
+    // Maintain a sparse, visibly layered deck through broken regions instead
+    // of dropping every cloud below the old binary threshold.
+    float wisps = smoothstep(coverage - 0.28, coverage - 0.02, shape) * 0.34;
+    return max(body, wisps) * horizonFade * clamp(frame.cloudWeather.z, 0.0, 1.0);
+}
+
 vec3 DirectionFromEquirect(vec2 uv)
 {
     float azimuth = (uv.x - 0.5) * (2.0 * PI);
@@ -109,6 +155,16 @@ void main()
     color += vec3(1.0, 0.30, 0.065) * pow(sunDot, 9.0) * (0.35 + day);
     color += vec3(1.0, 0.68, 0.28) * pow(sunDot, 44.0) * (0.45 + day);
     color += vec3(14.0, 10.0, 6.0) * smoothstep(0.99990, 0.999985, sunDot) * day;
+
+    // Visible macro cloud forms, lit by the same sun and ambient sky as the
+    // volume. This is not a screen-space overlay: it is part of the sampled
+    // environment used by the sky and water reflection paths.
+    float cloud = SkyCloudCoverage(ray);
+    vec3 cloudLight = mix(vec3(0.18, 0.24, 0.34), vec3(1.0, 0.76, 0.52),
+                          clamp(sunElevation * 1.8 + 0.25, 0.0, 1.0));
+    cloudLight *= mix(0.48, 1.15, clamp(frame.cloudWeather.w, 0.0, 1.0));
+    cloudLight *= 0.62 + 0.38 * pow(max(dot(ray, sun), 0.0), 2.0);
+    color = mix(color, cloudLight, cloud * 0.88);
 
     float starsVisible = clamp(frame.skyVisibility.x * frame.skyVisibility.y * (1.0 - weather * 0.80), 0.0, 1.0);
     color += vec3(0.50, 0.66, 1.0) * PortableStarField(ray) * starsVisible;

@@ -97,5 +97,10 @@ void main()
     float alpha = 1.0 - transmittance;
     if (alpha < 0.002)
         discard;
-    outColor = vec4(scattering, alpha);
+    // The HDR world target stores its scene and sampled sky sources with the
+    // shared 1/1.5 transfer. Convert the unpremultiplied cloud radiance first,
+    // then premultiply for the compositor's ONE / ONE_MINUS_SRC_ALPHA blend.
+    vec3 cloudRadiance = scattering / max(alpha, 1e-5);
+    vec3 encodedScattering = pow(max(cloudRadiance, vec3(0.0)), vec3(1.0 / 1.5)) * alpha;
+    outColor = vec4(encodedScattering, alpha);
 }

@@ -90,8 +90,11 @@ void main()
     float hU = HeightAt(worldXZ + vec2(0.0, terrain.terrainGrid));
     vec3 normal = normalize(vec3(hL - hR, 2.0 * terrain.terrainGrid, hD - hU));
     vec3 worldPos = vec3(worldXZ.x, height, worldXZ.y);
-    gl_Position = frame.projection * frame.view * vec4(worldPos, 1.0);
-    vWorldPos = worldPos;
+    // The shared scene view contains only camera rotation. Terrain maps retain
+    // absolute coordinates, but rasterization must use the scene's relative
+    // position contract for stable depth against meshes and shadows.
+    vWorldPos = worldPos - frame.camPos.xyz;
+    gl_Position = frame.projection * frame.view * vec4(vWorldPos, 1.0);
     vWorldNormal = normal;
     // Keep this coordinate continuous into the fragment stage. The material
     // shader derives its local tile coordinate after interpolation so a

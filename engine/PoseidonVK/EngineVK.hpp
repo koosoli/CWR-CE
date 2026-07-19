@@ -297,6 +297,7 @@ class EngineVK : public EngineDummy
     VkDescriptorPool _textureDescriptorPool = VK_NULL_HANDLE;
     VkPipeline _bootstrapPipeline = VK_NULL_HANDLE;
     VkPipeline _scenePipeline = VK_NULL_HANDLE;
+    VkPipeline _worldPrepassScenePipeline = VK_NULL_HANDLE;
     VkPipeline _proceduralSkyPipeline = VK_NULL_HANDLE;
     VkPipeline _skyMapBakePipeline = VK_NULL_HANDLE;
     VkPipeline _volumetricCloudPipeline = VK_NULL_HANDLE;
@@ -310,7 +311,9 @@ class EngineVK : public EngineDummy
     // Scene shader modules kept alive for pipeline cache variant creation.
     VkShaderModule _sceneVertexModule = VK_NULL_HANDLE;
     VkShaderModule _sceneFragmentModule = VK_NULL_HANDLE;
+    VkShaderModule _scenePrepassFragmentModule = VK_NULL_HANDLE;
     vk::PipelineCacheVK _scenePipelineCache;
+    vk::PipelineCacheVK _worldPrepassScenePipelineCache;
     VkPipeline _cockpitScenePipeline = VK_NULL_HANDLE;
     vk::PipelineCacheVK _cockpitScenePipelineCache;
     VkPipeline _worldLateScenePipeline = VK_NULL_HANDLE;

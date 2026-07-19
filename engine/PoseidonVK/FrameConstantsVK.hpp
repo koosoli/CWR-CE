@@ -154,16 +154,12 @@ inline FrameConstantsVK BuildFrameConstants(const render::frame::Frame& frame) n
             light.kind == render::frame::LocalLightKind::Spot ? 1.0f : 0.0f;
     }
 
-    // Extract camera world position from view matrix.
-    // view = [R | t] (row-major D3DMATRIX) where t = -R * camPos
-    // camPos = -R^T * t
-    {
-        const auto& v = constants.view;
-        constants.camPos[0] = -(v.m[0][0] * v.m[0][3] + v.m[1][0] * v.m[1][3] + v.m[2][0] * v.m[2][3]);
-        constants.camPos[1] = -(v.m[0][1] * v.m[0][3] + v.m[1][1] * v.m[1][3] + v.m[2][1] * v.m[2][3]);
-        constants.camPos[2] = -(v.m[0][2] * v.m[0][3] + v.m[1][2] * v.m[1][3] + v.m[2][2] * v.m[2][3]);
-        constants.camPos[3] = 0.0f;
-    }
+    // Scene extraction intentionally removes translation from the view matrix;
+    // use the retained absolute camera position for world-aligned terrain work.
+    constants.camPos[0] = frame.cameraPosition[0];
+    constants.camPos[1] = frame.cameraPosition[1];
+    constants.camPos[2] = frame.cameraPosition[2];
+    constants.camPos[3] = 0.0f;
 
     // Default specular (white, power 32, always enabled)
     constants.specularColor[0] = 0.8f;
