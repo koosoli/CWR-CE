@@ -47,6 +47,12 @@ struct SceneFlags
 // All the per-frame inputs BuildFrame consumes.
 struct SceneInputs
 {
+    // The semantic render-view descriptor selected at the world/frame
+    // observation seam.  Live extraction always populates this.  It is
+    // optional only to preserve the existing direct SceneInputs unit-test API;
+    // BuildFrame synthesizes a primary view for those legacy value fixtures.
+    std::optional<RenderView> renderView;
+
     // Camera + viewport (one of these per frame).
     CameraView camera = {};
     // Absolute world-space camera origin for effects that cannot use the

@@ -68,10 +68,8 @@ CameraView extractCamera(const Engine& engine, const ::Scene& scene)
     return out;
 }
 
-void extractLocalLights(SceneInputs& out, const ::Scene& scene)
+void extractLocalLights(SceneInputs& out, const ::Scene& scene, const float cameraPosition[3])
 {
-    const ::Camera* cam = scene.GetCamera();
-    const Vector3 camPos = cam ? cam->Position() : VZero;
     const LightList& lights = scene.ActiveLights();
     for (int i = 0; i < lights.Size() && out.localLightCount < kMaxFrameLocalLights; ++i)
     {
@@ -86,10 +84,9 @@ void extractLocalLights(SceneInputs& out, const ::Scene& scene)
             continue;
 
         LocalLight& local = out.localLights[out.localLightCount];
-        const Vector3 relPos = desc.pos - camPos;
-        local.position[0] = relPos.X();
-        local.position[1] = relPos.Y();
-        local.position[2] = relPos.Z();
+        local.position[0] = desc.pos.X() - cameraPosition[0];
+        local.position[1] = desc.pos.Y() - cameraPosition[1];
+        local.position[2] = desc.pos.Z() - cameraPosition[2];
         local.direction[0] = desc.dir.X();
         local.direction[1] = desc.dir.Y();
         local.direction[2] = desc.dir.Z();
@@ -204,32 +201,58 @@ void bucketDraw(SceneInputs& s, PassId passId, SceneDraw&& draw)
 
 SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
 {
+    return ExtractSceneInputs(engine, scene, RenderView{});
+}
+
+SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene, const RenderView& requestedView)
+{
     SceneInputs s;
 
-    s.camera = extractCamera(engine, scene);
-    if (const ::Camera* camera = scene.GetCamera())
+    // This is the world/frame observation seam: the primary descriptor is
+    // derived from Scene::_camera once, while an auxiliary descriptor arrives
+    // entirely as value data.  In particular, extraction never swaps the
+    // Scene camera to obtain a reflected view.
+    const bool isPrimaryView = requestedView.kind == RenderViewKind::Primary;
+    RenderView view = requestedView;
+    if (isPrimaryView)
     {
-        const Point3 position = camera->Position();
-        s.cameraPosition[0] = position.X();
-        s.cameraPosition[1] = position.Y();
-        s.cameraPosition[2] = position.Z();
-        const Vector3 forward = camera->Direction();
-        const Vector3 right = camera->DirectionAside();
-        const Vector3 up = camera->DirectionUp();
-        s.shadowInput.camera.forward[0] = forward.X();
-        s.shadowInput.camera.forward[1] = forward.Y();
-        s.shadowInput.camera.forward[2] = forward.Z();
-        s.shadowInput.camera.right[0] = right.X();
-        s.shadowInput.camera.right[1] = right.Y();
-        s.shadowInput.camera.right[2] = right.Z();
-        s.shadowInput.camera.up[0] = up.X();
-        s.shadowInput.camera.up[1] = up.Y();
-        s.shadowInput.camera.up[2] = up.Z();
-        s.shadowInput.camera.tanHalfX = camera->Left();
-        s.shadowInput.camera.tanHalfY = camera->Top();
-        s.shadowInput.camera.nearDistance = camera->ClipNear();
-        s.shadowInput.camera.farDistance = ENGINE_CONFIG.shadowsZ;
+        view.camera = extractCamera(engine, scene);
+        if (const ::Camera* camera = scene.GetCamera())
+        {
+            const Point3 position = camera->Position();
+            view.cameraPosition[0] = position.X();
+            view.cameraPosition[1] = position.Y();
+            view.cameraPosition[2] = position.Z();
+            const Vector3 forward = camera->Direction();
+            const Vector3 right = camera->DirectionAside();
+            const Vector3 up = camera->DirectionUp();
+            view.culling.forward[0] = forward.X();
+            view.culling.forward[1] = forward.Y();
+            view.culling.forward[2] = forward.Z();
+            view.culling.right[0] = right.X();
+            view.culling.right[1] = right.Y();
+            view.culling.right[2] = right.Z();
+            view.culling.up[0] = up.X();
+            view.culling.up[1] = up.Y();
+            view.culling.up[2] = up.Z();
+            view.culling.tanHalfX = camera->Left();
+            view.culling.tanHalfY = camera->Top();
+        }
     }
+    s.renderView = view;
+    // Keep the established primary fields populated for current callers and
+    // backends. BuildFrame selects renderView when present, so an auxiliary
+    // view cannot accidentally use the live primary camera.
+    s.camera = view.camera;
+    std::copy(std::begin(view.cameraPosition), std::end(view.cameraPosition), std::begin(s.cameraPosition));
+    std::copy(std::begin(view.culling.forward), std::end(view.culling.forward),
+              std::begin(s.shadowInput.camera.forward));
+    std::copy(std::begin(view.culling.right), std::end(view.culling.right), std::begin(s.shadowInput.camera.right));
+    std::copy(std::begin(view.culling.up), std::end(view.culling.up), std::begin(s.shadowInput.camera.up));
+    s.shadowInput.camera.tanHalfX = view.culling.tanHalfX;
+    s.shadowInput.camera.tanHalfY = view.culling.tanHalfY;
+    s.shadowInput.camera.nearDistance = view.camera.nearPlane;
+    s.shadowInput.camera.farDistance = ENGINE_CONFIG.shadowsZ;
     if (const Landscape* landscape = scene.GetLandscape())
     {
         const Vector3 wind = landscape->GetWind();
@@ -289,12 +312,12 @@ SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
         s.sunEnabled = false;
         s.localLightScale = 1.0f;
     }
-    extractLocalLights(s, scene);
+    extractLocalLights(s, scene, view.cameraPosition);
 
     // Flags — read from live world state where available.
-    s.flags.hudEnabled = true;
-    s.flags.inFirstPersonView = (GWorld && GWorld->GetCameraType() == CamInternal);
-    s.flags.shadowsEnabled = engine.ShadowMapsEnabled() && s.sunEnabled;
+    s.flags.hudEnabled = isPrimaryView;
+    s.flags.inFirstPersonView = isPrimaryView && (GWorld && GWorld->GetCameraType() == CamInternal);
+    s.flags.shadowsEnabled = isPrimaryView && engine.ShadowMapsEnabled() && s.sunEnabled;
     s.shadowInput.enabled = s.flags.shadowsEnabled;
     s.shadowInput.sunFactor = std::max(0.0f, std::min(1.0f, 1.0f - s.localLightScale));
 
@@ -309,7 +332,7 @@ SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
     // already flattened the demo world into screen-space TL vertices there.
     // The opaque resource ids were retained by the backend during source
     // capture, so they are valid Frame resources rather than synthetic tokens.
-    if (engine.ConsumesRenderFramePlan())
+    if (isPrimaryView && engine.ConsumesRenderFramePlan())
     {
         TerrainOpaque terrain;
         if (engine.GetDedicatedTerrainOpaque(terrain))
@@ -338,53 +361,60 @@ SceneInputs ExtractSceneInputs(const Engine& engine, const ::Scene& scene)
     // Bucket every per-frame DrawItem the engine recorded, so BuildFrame
     // produces a non-empty Frame and every descriptor invariant runs
     // against the real game's per-frame draw flow.
-    if (const std::vector<DrawItem>* draws = engine.GetRecordedDraws())
+    // DrawItems are produced after the primary camera selected/cropped the
+    // world.  Reusing them here would make an auxiliary view a disguised copy
+    // of primary visibility, so auxiliary extraction deliberately leaves its
+    // draw buckets empty until a view-independent source collector exists.
+    if (isPrimaryView)
     {
-        for (const auto& item : *draws)
+        if (const std::vector<DrawItem>* draws = engine.GetRecordedDraws())
         {
-            SceneDraw d = drawItemToSceneDraw(item);
-            PassId passId = item.passId;
-            switch (d.descriptor.pass)
+            for (const auto& item : *draws)
             {
-                case render::PassKind::Sky:
-                    passId = PassId::Sky;
-                    break;
-                case render::PassKind::TerrainOpaque:
-                    s.terrainOpaqueDraws.push_back(std::move(d));
-                    continue;
-                case render::PassKind::WorldOpaque:
-                    passId = PassId::Opaque;
-                    break;
-                case render::PassKind::WorldCutout:
-                    passId = PassId::Cutout;
-                    break;
-                case render::PassKind::WorldTransparent:
-                    passId = PassId::Transparent;
-                    break;
-                case render::PassKind::WorldShadow:
-                    passId = PassId::Shadow;
-                    break;
-                case render::PassKind::WorldLight:
-                    passId = PassId::Light;
-                    break;
-                case render::PassKind::WorldWater:
-                    passId = PassId::Water;
-                    break;
-                case render::PassKind::SurfaceOverlay:
-                    passId = PassId::OnSurface;
-                    break;
-                case render::PassKind::CockpitOpaque:
-                case render::PassKind::CockpitCutout:
-                case render::PassKind::CockpitTransparent:
-                    passId = PassId::Cockpit;
-                    break;
-                case render::PassKind::ScreenSpace3D:
-                    passId = PassId::ScreenSpace;
-                    break;
-                default:
-                    break;
+                SceneDraw d = drawItemToSceneDraw(item);
+                PassId passId = item.passId;
+                switch (d.descriptor.pass)
+                {
+                    case render::PassKind::Sky:
+                        passId = PassId::Sky;
+                        break;
+                    case render::PassKind::TerrainOpaque:
+                        s.terrainOpaqueDraws.push_back(std::move(d));
+                        continue;
+                    case render::PassKind::WorldOpaque:
+                        passId = PassId::Opaque;
+                        break;
+                    case render::PassKind::WorldCutout:
+                        passId = PassId::Cutout;
+                        break;
+                    case render::PassKind::WorldTransparent:
+                        passId = PassId::Transparent;
+                        break;
+                    case render::PassKind::WorldShadow:
+                        passId = PassId::Shadow;
+                        break;
+                    case render::PassKind::WorldLight:
+                        passId = PassId::Light;
+                        break;
+                    case render::PassKind::WorldWater:
+                        passId = PassId::Water;
+                        break;
+                    case render::PassKind::SurfaceOverlay:
+                        passId = PassId::OnSurface;
+                        break;
+                    case render::PassKind::CockpitOpaque:
+                    case render::PassKind::CockpitCutout:
+                    case render::PassKind::CockpitTransparent:
+                        passId = PassId::Cockpit;
+                        break;
+                    case render::PassKind::ScreenSpace3D:
+                        passId = PassId::ScreenSpace;
+                        break;
+                    default:
+                        break;
+                }
+                bucketDraw(s, passId, std::move(d));
             }
-            bucketDraw(s, passId, std::move(d));
         }
     }
 

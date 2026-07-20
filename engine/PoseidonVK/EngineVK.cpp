@@ -78,7 +78,7 @@ static_assert(sizeof(BootstrapVertex) == sizeof(float) * 5);
 struct WorldCompositePushConstants
 {
     float exposure;
-    uint32_t hdrEnabled;
+    uint32_t stylizedHdrResolve;
     uint32_t exposureHistoryValid;
 };
 
@@ -494,6 +494,11 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
         _volumetricCloudsEnabled = std::strcmp(value, "0") != 0;
     if (const char* value = std::getenv("POSEIDON_VK_HDR"))
         _hdrEnabled = std::strcmp(value, "0") != 0;
+    // The FP16 world target remains independently useful to water and sky. The
+    // old exposure/bloom/filmic presentation is therefore a separate, explicit
+    // diagnostic opt-in; parity presentation is the default.
+    if (const char* value = std::getenv("POSEIDON_VK_STYLIZED_HDR_RESOLVE"))
+        _stylizedHdrResolve = std::strcmp(value, "0") != 0;
     if (const char* value = std::getenv("POSEIDON_VK_TEMPORAL_EXPOSURE"))
         _temporalExposureEnabled = std::strcmp(value, "0") != 0;
     if (const char* value = std::getenv("POSEIDON_VK_CSM"))
@@ -671,6 +676,10 @@ bool EngineVK::Initialize(int width, int height, bool windowed, int bitsPerPixel
         LOG_INFO(Graphics, "Vulkan: temporal fixed-world volumetric clouds are enabled");
     if (_hdrEnabled)
         LOG_INFO(Graphics, "Vulkan: HDR world composition is enabled (R16G16B16A16_SFLOAT, exposure={})", _hdrExposure);
+    if (_stylizedHdrResolve)
+        LOG_WARN(Graphics, "Vulkan: legacy stylized HDR resolve enabled by POSEIDON_VK_STYLIZED_HDR_RESOLVE");
+    else
+        LOG_INFO(Graphics, "Vulkan: GL33-parity direct UNORM world presentation is enabled");
     if (_shadowTuning.enabled)
         LOG_INFO(Graphics, "Vulkan: cascaded shadow maps are enabled ({} cascades, {}x{})", _shadowTuning.cascadeCount,
                  _shadowTuning.resolution, _shadowTuning.resolution);
@@ -2478,17 +2487,11 @@ bool EngineVK::CreateSkyMapDescriptorLayout()
 
 bool EngineVK::CreateSkyMapPipelineLayout()
 {
-    VkPushConstantRange displayPush{};
-    displayPush.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    displayPush.offset = 0;
-    displayPush.size = sizeof(float);
     const VkDescriptorSetLayout displayLayouts[] = {_frameDescriptorSetLayout, _skyMapDescriptorSetLayout};
     VkPipelineLayoutCreateInfo displayInfo{};
     displayInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     displayInfo.setLayoutCount = 2;
     displayInfo.pSetLayouts = displayLayouts;
-    displayInfo.pushConstantRangeCount = 1;
-    displayInfo.pPushConstantRanges = &displayPush;
     VkResult result = vkCreatePipelineLayout(_device, &displayInfo, nullptr, &_skyMapPipelineLayout);
     if (result != VK_SUCCESS)
     {
@@ -5925,9 +5928,6 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
         VkDescriptorSet skySets[] = {_frameDescriptorSet, _skyMapDescriptorSet};
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _skyMapPipelineLayout, 0, 2,
                                 skySets, 0, nullptr);
-        const float hdrEnabled = _hdrEnabled ? 1.0f : 0.0f;
-        vkCmdPushConstants(commandBuffer, _skyMapPipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(hdrEnabled),
-                           &hdrEnabled);
         vkCmdDraw(commandBuffer, 3, 1, 0, 0);
     }
     bool recordingWaterPass = false;
@@ -6479,8 +6479,8 @@ bool EngineVK::RecordBootstrapCommand(uint32_t imageIndex)
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _worldCompositePipeline);
             vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _worldCompositePipelineLayout, 0,
                                     1, &_worldCompositeDescriptorSet, 0, nullptr);
-            const WorldCompositePushConstants constants{_hdrExposure, _hdrEnabled ? 1u : 0u,
-                                                         recordEyeAdaptation || _eyeAdaptationHistoryValid ? 1u : 0u};
+            const WorldCompositePushConstants constants{_hdrExposure, _stylizedHdrResolve ? 1u : 0u,
+                                                          recordEyeAdaptation || _eyeAdaptationHistoryValid ? 1u : 0u};
             vkCmdPushConstants(commandBuffer, _worldCompositePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                sizeof(constants), &constants);
             vkCmdDraw(commandBuffer, 3, 1, 0, 0);

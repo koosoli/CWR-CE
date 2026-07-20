@@ -4,8 +4,7 @@ layout(location = 0) in vec3 vWorldPos;
 layout(location = 1) in vec3 vWorldNormal;
 layout(location = 2) in vec2 vTexcoord0;
 layout(location = 3) in vec2 vTexcoord1;
-layout(location = 4) in float vFogFactor;
-layout(location = 5) flat in uint vDrawIndex;
+layout(location = 4) flat in uint vDrawIndex;
 
 layout(location = 0) out vec4 outColor;
 
@@ -96,6 +95,71 @@ const uint kPassSurfaceOverlay = 6u;
 const uint kPassTerrainOpaque = 12u;
 const uint kLightingLit         = 0u;
 const uint kLightingSunDisabled = 1u;
+
+// Atmospheric aerial perspective for camera-relative scene positions.
+//
+// fogParams remains the Frame contract {start, end, inverseRange, enabled}.
+// The range supplies both the reference optical depth and a conservative scale
+// height, so weather/gameplay needs no new parameter.  Extinction begins only
+// after fogStart, with beta = -ln(0.025) / (fogEnd - fogStart): a horizontal
+// ray has 2.5% transmittance at the authored end, then fades asymptotically
+// rather than hitting a linear cutoff.  Density follows exp(-s*ray.y/H), which
+// is the analytic integral of an exponential height field relative to the
+// camera.  This local formulation is stable for camera-relative geometry and
+// does not require an unavailable global fog-base height.
+float AtmosphericTransmittance(vec3 cameraRelativePosition, uint fogMode)
+{
+    // Disabled draws must remain byte-for-byte free of atmospheric modulation.
+    if (fogMode == 1u || frame.fogParams.w <= 0.5)
+        return 1.0;
+
+    float range = frame.fogParams.y - frame.fogParams.x;
+    if (range <= 1e-3)
+        return 1.0;
+
+    float distanceToFragment = length(cameraRelativePosition);
+    float segmentStart = max(frame.fogParams.x, 0.0);
+    float segmentLength = max(distanceToFragment - segmentStart, 0.0);
+    if (segmentLength <= 0.0)
+        return 1.0;
+
+    vec3 ray = cameraRelativePosition / max(distanceToFragment, 1e-4);
+    // Coupling the scale height to visibility keeps the profile restrained for
+    // clear weather and prevents a tiny range from creating a hard vertical
+    // fog wall. The clamp also protects malformed/extreme authored ranges.
+    float scaleHeight = clamp(range * 0.18, 25.0, 600.0);
+    float heightSlope = ray.y / scaleHeight;
+    float opticalLength;
+    if (abs(heightSlope) < 1e-5)
+    {
+        opticalLength = segmentLength;
+    }
+    else
+    {
+        float a = clamp(-heightSlope * segmentStart, -8.0, 8.0);
+        float b = clamp(-heightSlope * (segmentStart + segmentLength), -8.0, 8.0);
+        opticalLength = max((exp(a) - exp(b)) / heightSlope, 0.0);
+    }
+
+    const float kReferenceTransmittance = 0.025;
+    float beta = -log(kReferenceTransmittance) / range;
+    return clamp(exp(-beta * opticalLength), 0.0, 1.0);
+}
+
+vec3 AtmosphericInscatterColor(vec3 cameraRelativePosition)
+{
+    // Scene fog colour remains the primary artistic/weather control. A small
+    // forward-scattering sun lobe adds directional aerial perspective without
+    // a grade, HDR curve, or hard-coded scene colour.
+    float distanceToFragment = length(cameraRelativePosition);
+    vec3 ray = cameraRelativePosition / max(distanceToFragment, 1e-4);
+    vec3 rawToSun = -frame.sunDirection.xyz;
+    vec3 toSun = length(rawToSun) > 1e-4 ? normalize(rawToSun) : vec3(0.0, 1.0, 0.0);
+    float sunUp = smoothstep(-0.04, 0.10, toSun.y) * step(0.5, frame.lightingParams.x);
+    float forwardScatter = pow(max(dot(ray, toSun), 0.0), 8.0) * sunUp;
+    vec3 sunTint = vec3(1.0, 0.91, 0.78);
+    return mix(frame.fogColor.rgb, sunTint, 0.12 * forwardScatter);
+}
 
 // Receiver-side CSM evaluation mirrors the reference renderer's stable path:
 // move the receiver along its normal, correct the comparison plane per PCF
@@ -213,8 +277,13 @@ void main()
     uint alphaRef  = hasDraw ? drawConstants.draws[drawIdx].alphaRef : 0u;
     uint family    = hasDraw ? drawConstants.draws[drawIdx].shader   : kFamilyNormal;
     uint pass      = hasDraw ? drawConstants.draws[drawIdx].pass     : 0u;
+    uint fogMode   = hasDraw ? drawConstants.draws[drawIdx].fog      : 0u;
     vec4 tint      = hasDraw ? drawConstants.draws[drawIdx].tint     : vec4(1.0);
     vec3 receiverNormal = normalize(vWorldNormal);
+    // This is intentionally fragment-side: vWorldPos is camera-relative and
+    // survives the water displacement, while a vertex factor bands large
+    // triangles and makes shore/water fog disagree with adjacent geometry.
+    float atmosphericTransmittance = AtmosphericTransmittance(vWorldPos, fogMode);
 
     // Ordinary cutout materials derive alpha from tex0. Reject invisible
     // fragments before lighting and shadow work; Grass is excluded because its
@@ -513,7 +582,7 @@ void main()
                 float lit = litSum / wSum;
                 float lastSplit = frame.cascadeSplits[nC - 1];
                 float fade = clamp((lastSplit - eyeDepth) / max(frame.cascadeCtl.y, 0.001), 0.0, 1.0);
-                float strength = (1.0 - lit) * fade * clamp(vFogFactor, 0.0, 1.0);
+                float strength = (1.0 - lit) * fade * atmosphericTransmittance;
                 baseColor.rgb *= mix(1.0, frame.shadowCtl.z, strength);
             }
         }
@@ -530,13 +599,19 @@ void main()
 
 
     // -----------------------------------------------------------------------
-    // Fog: vFogFactor=1 near (no fog), 0 far (full fog).
+    // Aerial perspective is shared by opaque, cutout and water families after
+    // their material/shore shading, so all visible scene surfaces recede into
+    // the same atmosphere. AlphaFog intentionally retains its legacy contract:
+    // it attenuates coverage instead of replacing RGB with in-scattered light.
     // -----------------------------------------------------------------------
-    vec3 fogged = mix(frame.fogColor.rgb, baseColor, vFogFactor);
-    float luma = dot(fogged, vec3(0.2126, 0.7152, 0.0722));
-    fogged = mix(vec3(luma), fogged, 1.08);
-    // Partial gamma boost to compensate for UNORM swapchain (no hardware sRGB encode).
-    // pow(x, 1/1.5) is between no boost (too dark) and full sRGB (washed out).
-    fogged = pow(fogged, vec3(1.0 / 1.5));
-    outColor = vec4(fogged, baseAlpha);
+    vec3 fogged = baseColor;
+    if (fogMode == 0u)
+        fogged = mix(AtmosphericInscatterColor(vWorldPos), baseColor, atmosphericTransmittance);
+    else if (fogMode == 2u)
+        baseAlpha *= atmosphericTransmittance;
+    // GL33 writes this display-referred material/fog result directly to its
+    // UNORM framebuffer. Keep that source contract intact for the Vulkan world
+    // target: global saturation and gamma grades belong neither to a material
+    // nor to fog. Alpha remains linear and bounded for the existing blend modes.
+    outColor = vec4(max(fogged, vec3(0.0)), clamp(baseAlpha, 0.0, 1.0));
 }

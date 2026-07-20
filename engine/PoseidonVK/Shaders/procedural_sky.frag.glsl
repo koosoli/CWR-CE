@@ -21,11 +21,6 @@ layout(set = 1, binding = 0) uniform sampler2D skyMap;
 layout(location = 0) in vec3 vWorldRay;
 layout(location = 0) out vec4 outColor;
 
-layout(push_constant) uniform ProceduralSkyParams
-{
-    float hdrEnabled;
-} skyParams;
-
 void main()
 {
     vec3 ray = normalize(vWorldRay);
@@ -34,15 +29,9 @@ void main()
                    acos(clamp(ray.y, -1.0, 1.0)) * (1.0 / 3.141592653589793));
     vec3 color = texture(skyMap, uv).rgb;
 
-    if (skyParams.hdrEnabled > 0.5)
-    {
-        // Preserve radiance above one for the FP16 scene target. The compositor
-        // reverses this 1/1.5 source transfer before ACES and bloom.
-        outColor = vec4(pow(max(color, vec3(0.0)), vec3(1.0 / 1.5)), 1.0);
-    }
-    else
-    {
-        // The direct UNORM swapchain expects display-referred output.
-        outColor = vec4(sqrt(clamp(color, 0.0, 1.0)), 1.0);
-    }
+    // The cached map and water reflection sample the same ungraded sky source.
+    // Keeping its radiance untouched avoids a sky-only gamma conversion before
+    // the direct UNORM presentation path; the present compositor clamps only at
+    // the final display boundary.
+    outColor = vec4(max(color, vec3(0.0)), 1.0);
 }

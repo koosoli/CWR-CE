@@ -464,6 +464,9 @@ class EngineVK : public EngineDummy
     bool _volumetricCloudsEnabled = false;
     bool _cloudHistoryValid = false;
     bool _hdrEnabled = true;
+    // Presentation defaults to GL33-style direct UNORM output. This opt-in
+    // keeps the previous exposure/bloom/filmic resolve available for comparison.
+    bool _stylizedHdrResolve = false;
     bool _waterDepthOpticsActive = false;
     bool _waterDepthSnapshotInitialized = false;
     bool _temporalExposureEnabled = false;

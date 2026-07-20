@@ -17,6 +17,12 @@ namespace render::frame
 // engine.
 SceneInputs ExtractSceneInputs(const Engine& engine, const Scene& scene);
 
+// Extract a specific value-owned view without changing Scene::_camera.  Primary
+// reads the live scene camera; Auxiliary consumes the supplied RenderView.  An
+// auxiliary extraction intentionally does not replay the recorded primary draw
+// list: a later visibility-source milestone must collect it for that view.
+SceneInputs ExtractSceneInputs(const Engine& engine, const Scene& scene, const RenderView& view);
+
 } // namespace render::frame
 
 } // namespace Poseidon

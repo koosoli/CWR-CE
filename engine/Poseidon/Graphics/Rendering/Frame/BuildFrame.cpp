@@ -52,6 +52,7 @@ bool emitPass(Frame& f, FramePassKind kind, const std::vector<SceneDraw>& draws)
 Frame BuildFrame(const SceneInputs& s)
 {
     Frame f;
+    f.renderView = s.renderView;
     f.camera = s.camera;
     f.cameraPosition[0] = s.cameraPosition[0];
     f.cameraPosition[1] = s.cameraPosition[1];

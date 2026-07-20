@@ -11,8 +11,7 @@ layout(location = 0) out vec3 vWorldPos;
 layout(location = 1) out vec3 vWorldNormal;
 layout(location = 2) out vec2 vTexcoord0;
 layout(location = 3) out vec2 vTexcoord1;
-layout(location = 4) out float vFogFactor;
-layout(location = 5) flat out uint vDrawIndex;
+layout(location = 4) flat out uint vDrawIndex;
 
 layout(set = 0, binding = 0, std140) uniform FrameConstants
 {
@@ -188,16 +187,7 @@ void main()
         vTexcoord1 = inTexcoord;
     }
 
-    // Per-draw fog control (mirrors FogMode in RenderPassDescriptor.hpp):
-    //   0 = Enabled  — standard distance fog
-    //   1 = Disabled — no fog (sky, cockpit, first-person)
-    //   2 = AlphaFog — alpha-channel attenuation (treated as enabled for now)
-    // When disabled the factor is forced to 1.0 (no fog mixing in the fragment shader).
-    uint fogMode = hasDrawConstants ? drawConstants.draws[drawIndex].fog : 0u;
-    float dist = length(viewPos.xyz);
-    // Exponential (power) fog ramp: replaces linear fog to stay clear across near/mid-field
-    // and fade smoothly near the far edge. Matches the visibility boost from the wgpu fork.
-    float u = clamp(dist / max(frame.fogParams.y, 1.0), 0.0, 1.0);
-    float fogFactor = 1.0 - pow(u, 3.0);
-    vFogFactor = (fogMode == 0u && frame.fogParams.w > 0.5) ? fogFactor : 1.0;
+    // Atmospheric transmittance is evaluated per-fragment from vWorldPos.
+    // Interpolating a vertex fog factor visibly bands large terrain, water and
+    // cutout triangles, especially around the clear near-field transition.
 }

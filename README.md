@@ -39,8 +39,12 @@ The Vulkan backend has an opt-in world-composition path for local smoke tests:
   raymarching, temporal reconstruction, and terrain cloud shadows. Enable it with
   `POSEIDON_VK_VOLUMETRIC_CLOUDS=1`; it retains cockpit, binder, HUD, and other
   legacy display-referred content after world composition.
-- Isolated FP16 world target, ACES tone mapping, bloom, and stable angular eye
-  exposure. GPU-only temporal adaptation is available only with
+- Isolated FP16 world target for water and world-pass ordering. Its default
+  presentation contract now matches GL33: scene and fog RGB are copied to the
+  opaque UNORM display surface without Vulkan-only saturation, exposure, bloom,
+  filmic, or gamma grading. `POSEIDON_VK_STYLIZED_HDR_RESOLVE=1` explicitly
+  restores the experimental exposure/bloom/filmic resolve for comparison.
+  GPU-only temporal adaptation is available only with
   `POSEIDON_VK_TEMPORAL_EXPOSURE=1`; it remains under tuning. Legacy briefing
   pages, cockpit, HUD, and other display-referred UI are composed after tone
   mapping.
@@ -147,8 +151,9 @@ smoke-testable.
   scene shaders.
 - [x] Add first frame-global active local light extraction and scene-shader
   consumption for Vulkan point/spot lighting bring-up.
-- [ ] Refine Vulkan local lighting toward per-object light lists,
-  material-scaled colors, and GL33 visual parity.
+- [ ] Port GL33 material-light inputs (including per-object light lists and
+  material-scaled colors) to Vulkan. The display/fog resolve milestone does not
+  establish material-light parity.
 - [x] Drive the Vulkan scene draw loop from the backend-neutral frame plan,
   issuing one indexed draw per recorded command with per-draw SSBO world
   matrices (bring-up buffers shared until real mesh upload lands).
@@ -372,10 +377,11 @@ PoseidonGameDemo.exe --render vulkan --window
 The `--render` flag selects the backend (`auto`, `gl33`, or `vulkan`).
 The `--window` flag starts in windowed mode.
 
-Enable the experimental sky, cloud, and HDR composition path with:
+The Vulkan default is the GL33-parity direct-UNORM resolve. To compare the
+previous stylized HDR presentation, explicitly opt in with:
 
 ```powershell
-$env:POSEIDON_VK_PROCEDURAL_SKY='1'; $env:POSEIDON_VK_VOLUMETRIC_CLOUDS='1'; $env:POSEIDON_VK_HDR='1'; .\PoseidonGameDemo.exe --render vulkan --window
+$env:POSEIDON_VK_STYLIZED_HDR_RESOLVE='1'; .\PoseidonGameDemo.exe --render vulkan --window
 ```
 
 ### Smoke Testing

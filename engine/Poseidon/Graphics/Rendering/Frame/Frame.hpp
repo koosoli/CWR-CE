@@ -198,6 +198,27 @@ struct ShadowInput
     std::vector<ShadowCaster> casters;
 };
 
+// A value-owned camera request for the primary render or a future auxiliary
+// view such as a planar reflection. It deliberately contains no backend state
+// and never requires temporarily replacing Scene::_camera.
+enum class RenderViewKind : std::uint8_t
+{
+    Primary = 0,
+    Auxiliary = 1,
+};
+
+struct RenderView
+{
+    RenderViewKind kind = RenderViewKind::Primary;
+    CameraView camera = {};
+    float cameraPosition[3] = {0.0f, 0.0f, 0.0f};
+    ShadowCamera culling = {};
+    // Optional absolute-world clipping plane: dot(normal, position) + offset.
+    // Auxiliary extraction records it; a future view-aware collector owns its
+    // actual visibility and raster clipping.
+    std::optional<std::array<float, 4>> clipPlane;
+};
+
 // Immutable map snapshot for a dedicated terrain backend. The texture-index
 // high bit is the legacy transition (ClampU|ClampV) flag; layers remain native
 // texture resources and are never packed into an atlas.
@@ -302,6 +323,11 @@ struct Pass
 
 struct Frame
 {
+    // The selected primary or auxiliary view, including future reflection
+    // culling/clip semantics.  Current backends consume the legacy camera
+    // fields below; this remains backend-neutral until an auxiliary target is
+    // scheduled.
+    std::optional<RenderView> renderView;
     CameraView camera = {};
     float cameraPosition[3] = {0.0f, 0.0f, 0.0f};
     std::vector<Pass> passes;

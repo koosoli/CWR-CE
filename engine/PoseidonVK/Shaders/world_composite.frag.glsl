@@ -20,7 +20,7 @@ layout(set = 0, binding = 1, std140) uniform FrameConstants
 layout(push_constant) uniform WorldCompositeParams
 {
     float exposure;
-    uint hdrEnabled;
+    uint stylizedHdrResolve;
     uint exposureHistoryValid;
 } composite;
 
@@ -28,9 +28,8 @@ layout(location = 0) in vec2 vUv;
 layout(location = 1) flat in vec3 vCentreWorldRay;
 layout(location = 0) out vec4 outColor;
 
-// Same fixed filmic stock as the reference renderer.  The former ACES fit is
-// intentionally gentle and was flattening the midtones relative to both the
-// original game and the reference HDR path.
+// Legacy experimental resolve retained behind an explicit opt-in. The default
+// path below deliberately does not use any of these presentation transforms.
 vec3 HablePartial(vec3 x)
 {
     return ((x * (0.15 * x + 0.10 * 0.50) + 0.20 * 0.02) /
@@ -45,16 +44,20 @@ vec3 HableFilmic(vec3 x)
 void main()
 {
     vec4 world = texture(worldColor, vUv);
-    // Keep the existing cloud compositor exactly display-referred unless HDR is opted in.
-    if (composite.hdrEnabled == 0u)
+    // GL33's normal scene path writes display-referred RGB directly to an
+    // UNORM framebuffer. Vulkan keeps the intermediate target for water and
+    // world/pass ordering, but its default resolve is only that same UNORM
+    // boundary. Never forward world alpha to the opaque present surface.
+    if (composite.stylizedHdrResolve == 0u)
     {
-        outColor = vec4(world.rgb, 1.0);
+        outColor = vec4(clamp(world.rgb, vec3(0.0), vec3(1.0)), 1.0);
         return;
     }
 
-    // Scene shaders store pow(linear, 1/1.5); procedural sky and clouds use
-    // sqrt. Without source provenance, this inverse is the closest common fit.
-    vec3 scene = pow(max(world.rgb, vec3(0.0)), vec3(1.5));
+    // The parity source contract is ungraded RGB, so the optional stylized
+    // resolve starts from that source directly rather than trying to undo a
+    // renderer-specific source gamma transform.
+    vec3 scene = max(world.rgb, vec3(0.0));
 
     vec2 texel = 1.0 / vec2(textureSize(worldColor, 0));
     float eyeExposure = composite.exposure;
@@ -74,7 +77,7 @@ void main()
     vec3 bloom = max(scene - vec3(0.55), vec3(0.0)) * 0.25;
     for (int i = 0; i < 8; ++i)
     {
-        vec3 sampleScene = pow(max(texture(worldColor, vUv + offsets[i] * texel).rgb, vec3(0.0)), vec3(1.5));
+        vec3 sampleScene = max(texture(worldColor, vUv + offsets[i] * texel).rgb, vec3(0.0));
         bloom += max(sampleScene - vec3(0.55), vec3(0.0)) * 0.09375;
     }
     const vec2 ringDirections[8] = vec2[](vec2(-1.0, 0.0), vec2(1.0, 0.0), vec2(0.0, -1.0), vec2(0.0, 1.0),
@@ -82,8 +85,8 @@ void main()
                                            vec2(-0.7071, 0.7071), vec2(0.7071, 0.7071));
     for (int i = 0; i < 8; ++i)
     {
-        vec3 nearRing = pow(max(texture(worldColor, vUv + ringDirections[i] * texel * 7.0).rgb, vec3(0.0)), vec3(1.5));
-        vec3 farRing = pow(max(texture(worldColor, vUv + ringDirections[i] * texel * 22.0).rgb, vec3(0.0)), vec3(1.5));
+        vec3 nearRing = max(texture(worldColor, vUv + ringDirections[i] * texel * 7.0).rgb, vec3(0.0));
+        vec3 farRing = max(texture(worldColor, vUv + ringDirections[i] * texel * 22.0).rgb, vec3(0.0));
         bloom += max(nearRing - vec3(0.55), vec3(0.0)) * 0.0675;
         bloom += max(farRing - vec3(0.55), vec3(0.0)) * 0.027;
     }
